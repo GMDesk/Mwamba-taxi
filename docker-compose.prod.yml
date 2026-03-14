@@ -1,0 +1,119 @@
+version: "3.9"
+
+# =============================================================================
+# Mwamba Taxi — Déploiement Production
+# Architecture : Nginx → Daphne (ASGI) + Celery + PostgreSQL + Redis
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Base de données PostgreSQL
+  # ---------------------------------------------------------------------------
+  db:
+    image: postgres:16-alpine
+    restart: always
+    env_file: .env.production
+    environment:
+      POSTGRES_DB: mwamba_taxi
+      POSTGRES_USER: mwamba
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mwamba -d mwamba_taxi"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # Redis (cache + channel layer WebSocket + Celery broker)
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    restart: always
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # Django API — Daphne ASGI (HTTP + WebSockets)
+  # ---------------------------------------------------------------------------
+  web:
+    build: .
+    restart: always
+    env_file: .env.production
+    volumes:
+      - static_files:/app/staticfiles
+      - media_files:/app/mediafiles
+      # Clé Firebase : copier le fichier JSON sur le serveur puis monter ici
+      - ./firebase-key.json:/app/firebase-key.json:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    expose:
+      - "8000"
+
+  # ---------------------------------------------------------------------------
+  # Celery Worker (tâches asynchrones : SMS, notifications, paiements)
+  # ---------------------------------------------------------------------------
+  celery:
+    build: .
+    restart: always
+    env_file: .env.production
+    command: celery -A config worker --loglevel=info --concurrency=4
+    volumes:
+      - ./firebase-key.json:/app/firebase-key.json:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # Celery Beat (tâches planifiées : rappels, nettoyage, stats)
+  # ---------------------------------------------------------------------------
+  celery-beat:
+    build: .
+    restart: always
+    env_file: .env.production
+    command: celery -A config beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # Nginx (reverse proxy HTTP/HTTPS + WebSocket upgrade)
+  # ---------------------------------------------------------------------------
+  nginx:
+    image: nginx:1.25-alpine
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - static_files:/app/staticfiles:ro
+      - media_files:/app/mediafiles:ro
+      # Certificats SSL (générés par Certbot ou uploadés)
+      - ./nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      - web
+
+# =============================================================================
+# Volumes persistants
+# =============================================================================
+volumes:
+  postgres_data:
+  redis_data:
+  static_files:
+  media_files:
