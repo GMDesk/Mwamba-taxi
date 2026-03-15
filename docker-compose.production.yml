@@ -1,0 +1,38 @@
+# Surcharge de production — utiliser avec:
+# docker compose -f docker-compose.yml -f docker-compose.production.yml up -d
+
+services:
+  db:
+    # Ne pas exposer le port PostgreSQL sur Internet
+    ports: []
+
+  redis:
+    # Ne pas exposer le port Redis sur Internet
+    ports: []
+
+  backend:
+    # En production l'image est déjà construite — pas de build à chaud
+    env_file:
+      - ./backend/.env.production
+    ports: []  # Nginx fait le proxy, pas besoin d'exposer 8000
+
+  celery_worker:
+    env_file:
+      - ./backend/.env.production
+
+  celery_beat:
+    env_file:
+      - ./backend/.env.production
+
+  nginx:
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - static_files:/var/www/static:ro
+      - media_files:/var/www/media:ro
+      # Certificats Let's Encrypt
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      # Dossier webroot pour le renouvellement certbot
+      - certbot_www:/var/www/certbot:ro
+
+volumes:
+  certbot_www:
