@@ -58,13 +58,13 @@ class DriverRegistrationSerializer(serializers.Serializer):
     vehicle_make = serializers.CharField(max_length=50)
     vehicle_model = serializers.CharField(max_length=50)
     vehicle_year = serializers.IntegerField(required=False)
-    vehicle_color = serializers.CharField(max_length=30)
+    vehicle_color = serializers.CharField(max_length=30, required=False, allow_blank=True)
     license_plate = serializers.CharField(max_length=20)
 
-    # Documents
-    drivers_license_photo = serializers.ImageField()
-    vehicle_registration_photo = serializers.ImageField()
-    vehicle_photo = serializers.ImageField()
+    # Documents (optional at registration, can be uploaded later)
+    drivers_license_photo = serializers.ImageField(required=False, allow_null=True)
+    vehicle_registration_photo = serializers.ImageField(required=False, allow_null=True)
+    vehicle_photo = serializers.ImageField(required=False, allow_null=True)
 
     def validate_phone_number(self, value):
         if User.objects.filter(phone_number=value).exists():
