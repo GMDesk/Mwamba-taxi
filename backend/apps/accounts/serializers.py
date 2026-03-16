@@ -7,13 +7,19 @@ User = get_user_model()
 
 
 class UserSerializer(serializers.ModelSerializer):
+    referral_code = serializers.SerializerMethodField()
+
     class Meta:
         model = User
         fields = [
             "id", "phone_number", "full_name", "email", "role",
-            "avatar", "is_phone_verified", "created_at",
+            "avatar", "is_phone_verified", "created_at", "referral_code",
         ]
-        read_only_fields = ["id", "is_phone_verified", "created_at"]
+        read_only_fields = ["id", "is_phone_verified", "created_at", "referral_code"]
+
+    def get_referral_code(self, obj):
+        # Generate a stable referral code from the user UUID (first 8 chars uppercased)
+        return str(obj.id).replace('-', '')[:8].upper()
 
 
 class UserCreateSerializer(serializers.ModelSerializer):
