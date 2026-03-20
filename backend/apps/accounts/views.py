@@ -34,6 +34,7 @@ class RegisterPassengerView(generics.CreateAPIView):
     """Register a new passenger."""
 
     serializer_class = UserCreateSerializer
+    authentication_classes = []
     permission_classes = [permissions.AllowAny]
 
     def create(self, request, *args, **kwargs):
@@ -56,6 +57,7 @@ class RegisterPassengerView(generics.CreateAPIView):
 class RegisterDriverView(APIView):
     """Register a new driver with vehicle & documents."""
 
+    authentication_classes = []
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
@@ -80,6 +82,7 @@ class RegisterDriverView(APIView):
 class LoginView(APIView):
     """Login via password or OTP."""
 
+    authentication_classes = []
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
@@ -141,6 +144,7 @@ class LoginView(APIView):
 class RequestOTPView(APIView):
     """Send OTP to phone number."""
 
+    authentication_classes = []
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
@@ -179,6 +183,7 @@ class RequestOTPView(APIView):
 class VerifyOTPView(APIView):
     """Verify OTP & mark phone as verified."""
 
+    authentication_classes = []
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
