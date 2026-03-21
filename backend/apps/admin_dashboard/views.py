@@ -8,12 +8,44 @@ from rest_framework.views import APIView
 
 from apps.accounts.models import DriverProfile
 from apps.accounts.permissions import IsAdmin
-from apps.accounts.serializers import DriverProfileSerializer, UserSerializer
+from apps.notifications.models import Notification
 from apps.payments.models import Payment
+from apps.promotions.models import PromoCode
+from apps.reviews.models import Review
 from apps.rides.models import Ride, SOSAlert
-from apps.rides.serializers import RideSerializer, SOSAlertSerializer
+
+from .serializers import (
+    AdminDriverProfileSerializer,
+    AdminNotificationSerializer,
+    AdminPaymentSerializer,
+    AdminPromoCodeSerializer,
+    AdminRegisterSerializer,
+    AdminReviewSerializer,
+    AdminRideSerializer,
+    AdminSOSAlertSerializer,
+    AdminUserSerializer,
+)
 
 User = get_user_model()
+
+
+class AdminRegisterView(APIView):
+    """Create a new admin account. Public registration."""
+
+    authentication_classes = []
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        serializer = AdminRegisterSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        return Response(
+            {
+                "user": AdminUserSerializer(user).data,
+                "message": "Administrateur créé avec succès.",
+            },
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class DashboardStatsView(APIView):
@@ -142,7 +174,7 @@ class DashboardChartDataView(APIView):
 class AdminUserListView(generics.ListAPIView):
     """List all users (with filters)."""
 
-    serializer_class = UserSerializer
+    serializer_class = AdminUserSerializer
     permission_classes = [permissions.IsAuthenticated, IsAdmin]
     filterset_fields = ["role", "is_active", "is_phone_verified"]
     search_fields = ["full_name", "phone_number", "email"]
@@ -154,7 +186,7 @@ class AdminUserListView(generics.ListAPIView):
 class AdminUserDetailView(generics.RetrieveUpdateDestroyAPIView):
     """View/edit/deactivate a user."""
 
-    serializer_class = UserSerializer
+    serializer_class = AdminUserSerializer
     permission_classes = [permissions.IsAuthenticated, IsAdmin]
     lookup_field = "id"
 
@@ -170,7 +202,7 @@ class AdminUserDetailView(generics.RetrieveUpdateDestroyAPIView):
 class AdminDriverListView(generics.ListAPIView):
     """List all driver profiles."""
 
-    serializer_class = DriverProfileSerializer
+    serializer_class = AdminDriverProfileSerializer
     permission_classes = [permissions.IsAuthenticated, IsAdmin]
     filterset_fields = ["status", "is_online"]
 
@@ -205,13 +237,13 @@ class AdminDriverApprovalView(APIView):
             )
 
         profile.save(update_fields=["status", "rejection_reason"])
-        return Response(DriverProfileSerializer(profile).data)
+        return Response(AdminDriverProfileSerializer(profile).data)
 
 
 class AdminRideListView(generics.ListAPIView):
     """List all rides."""
 
-    serializer_class = RideSerializer
+    serializer_class = AdminRideSerializer
     permission_classes = [permissions.IsAuthenticated, IsAdmin]
     filterset_fields = ["status"]
     search_fields = ["passenger__full_name", "driver__full_name", "pickup_address"]
@@ -223,7 +255,7 @@ class AdminRideListView(generics.ListAPIView):
 class AdminRideDetailView(generics.RetrieveAPIView):
     """View ride details."""
 
-    serializer_class = RideSerializer
+    serializer_class = AdminRideSerializer
     permission_classes = [permissions.IsAuthenticated, IsAdmin]
     lookup_field = "id"
 
@@ -234,7 +266,7 @@ class AdminRideDetailView(generics.RetrieveAPIView):
 class AdminSOSAlertListView(generics.ListAPIView):
     """List SOS alerts."""
 
-    serializer_class = SOSAlertSerializer
+    serializer_class = AdminSOSAlertSerializer
     permission_classes = [permissions.IsAuthenticated, IsAdmin]
     filterset_fields = ["status"]
 
@@ -256,4 +288,76 @@ class AdminSOSResolveView(APIView):
         alert.status = SOSAlert.Status.RESOLVED
         alert.resolved_at = timezone.now()
         alert.save(update_fields=["status", "resolved_at"])
-        return Response(SOSAlertSerializer(alert).data)
+        return Response(AdminSOSAlertSerializer(alert).data)
+
+
+# ---------------------------------------------------------------------------
+# Payments
+# ---------------------------------------------------------------------------
+class AdminPaymentListView(generics.ListAPIView):
+    """List all payments."""
+
+    serializer_class = AdminPaymentSerializer
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+    filterset_fields = ["status", "method"]
+    search_fields = ["payer__full_name", "provider_transaction_id"]
+
+    def get_queryset(self):
+        return Payment.objects.select_related("ride", "payer").order_by("-created_at")
+
+
+# ---------------------------------------------------------------------------
+# Promotions
+# ---------------------------------------------------------------------------
+class AdminPromoListCreateView(generics.ListCreateAPIView):
+    """List or create promo codes."""
+
+    serializer_class = AdminPromoCodeSerializer
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+    filterset_fields = ["is_active", "discount_type"]
+    search_fields = ["code", "description"]
+
+    def get_queryset(self):
+        return PromoCode.objects.order_by("-created_at")
+
+
+class AdminPromoDetailView(generics.RetrieveUpdateAPIView):
+    """View or update a promo code."""
+
+    serializer_class = AdminPromoCodeSerializer
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+    lookup_field = "id"
+
+    def get_queryset(self):
+        return PromoCode.objects.all()
+
+
+# ---------------------------------------------------------------------------
+# Reviews
+# ---------------------------------------------------------------------------
+class AdminReviewListView(generics.ListAPIView):
+    """List all reviews."""
+
+    serializer_class = AdminReviewSerializer
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+    filterset_fields = ["rating"]
+    search_fields = ["reviewer__full_name", "reviewed_user__full_name"]
+
+    def get_queryset(self):
+        return Review.objects.select_related(
+            "ride", "reviewer", "reviewed_user"
+        ).order_by("-created_at")
+
+
+# ---------------------------------------------------------------------------
+# Notifications
+# ---------------------------------------------------------------------------
+class AdminNotificationListView(generics.ListAPIView):
+    """List all notifications."""
+
+    serializer_class = AdminNotificationSerializer
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+    filterset_fields = ["channel", "category", "is_read"]
+
+    def get_queryset(self):
+        return Notification.objects.select_related("recipient").order_by("-sent_at")
