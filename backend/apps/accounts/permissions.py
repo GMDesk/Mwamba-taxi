@@ -12,12 +12,22 @@ class IsDriver(BasePermission):
 
 
 class IsApprovedDriver(BasePermission):
+    message = "Votre compte chauffeur n'est pas encore approuvé. Veuillez patienter pendant la vérification de vos documents."
+
     def has_permission(self, request, view):
         if not (request.user.is_authenticated and request.user.role == "driver"):
             return False
-        return hasattr(request.user, "driver_profile") and (
-            request.user.driver_profile.status == "approved"
-        )
+        if not hasattr(request.user, "driver_profile"):
+            return False
+        profile = request.user.driver_profile
+        if profile.status == "pending":
+            self.message = "Votre compte est en cours de vérification. Vous serez notifié une fois approuvé."
+        elif profile.status == "rejected":
+            reason = profile.rejection_reason or "Non spécifiée"
+            self.message = f"Votre compte a été rejeté. Raison : {reason}"
+        elif profile.status == "suspended":
+            self.message = "Votre compte a été suspendu. Contactez le support pour plus d'informations."
+        return profile.status == "approved"
 
 
 class IsAdmin(BasePermission):
