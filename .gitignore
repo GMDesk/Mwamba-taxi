@@ -1,0 +1,37 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment
+.env
+*.env.local
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Django
+*.sqlite3
+staticfiles/
+media/
+
+# Flutter
+mobile/mwamba_taxi/.dart_tool/
+mobile/mwamba_taxi/build/
+mobile/mwamba_driver/.dart_tool/
+mobile/mwamba_driver/build/
+*.iml
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+postgres_data/
+backend.zip
