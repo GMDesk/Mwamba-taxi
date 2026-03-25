@@ -42,7 +42,10 @@ class RideSerializer(serializers.ModelSerializer):
             return {
                 "id": obj.assigned_driver.id,
                 "name": obj.assigned_driver.full_name,
+                "photo": obj.assigned_driver.avatar.url if obj.assigned_driver.avatar else None,
                 "vehicle": f"{p.vehicle_make} {p.vehicle_model}",
+                "vehicle_color": p.vehicle_color,
+                "license_plate": p.license_plate,
                 "rating": float(p.rating_average) if p.rating_average else None,
             }
         return None

@@ -122,10 +122,15 @@ class RideTrackingConsumer(AsyncWebsocketConsumer):
         }))
 
     async def status_update(self, event):
-        # Forward all fields from the event (status, message, assigned_driver, etc.)
+        # Forward all fields from the event (status, message, driver info, etc.)
         payload = {"type": "status_update"}
-        for key in ("status", "message", "assigned_driver", "expires_at",
-                     "timeout_seconds", "driver_name", "driver_id"):
+        forward_keys = (
+            "status", "message", "assigned_driver", "expires_at",
+            "timeout_seconds", "driver_name", "driver_id",
+            "driver_phone", "driver_photo", "driver_rating",
+            "vehicle", "vehicle_color", "license_plate",
+        )
+        for key in forward_keys:
             if key in event:
                 payload[key] = event[key]
         await self.send(text_data=json.dumps(payload))

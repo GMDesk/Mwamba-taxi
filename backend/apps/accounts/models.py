@@ -162,6 +162,22 @@ class DriverProfile(models.Model):
         "Revenus totaux", max_digits=12, decimal_places=2, default=0.00
     )
 
+    # Scoring stats (for intelligent matching)
+    acceptance_rate = models.DecimalField(
+        "Taux d'acceptation", max_digits=5, decimal_places=2, default=100.00,
+        help_text="Percentage of ride requests accepted (0-100)",
+    )
+    cancellation_rate = models.DecimalField(
+        "Taux d'annulation", max_digits=5, decimal_places=2, default=0.00,
+        help_text="Percentage of rides cancelled by driver (0-100)",
+    )
+    total_accepted = models.PositiveIntegerField("Courses acceptées", default=0)
+    total_declined = models.PositiveIntegerField("Courses déclinées", default=0)
+    total_cancelled = models.PositiveIntegerField("Courses annulées", default=0)
+    last_ride_at = models.DateTimeField("Dernière course", null=True, blank=True)
+    rides_today = models.PositiveIntegerField("Courses aujourd'hui", default=0)
+    rides_today_date = models.DateField("Date compteur journalier", null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

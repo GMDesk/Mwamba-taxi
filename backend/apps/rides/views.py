@@ -15,6 +15,14 @@ from apps.promotions.models import PromoCode, PromoUsage
 
 from .models import Ride, RideLocationLog, SOSAlert
 from .pricing import estimate_price, haversine_distance
+from .scoring import (
+    DRIVER_ACCEPT_TIMEOUT,
+    MAX_SEARCH_RADIUS_KM,
+    rank_drivers,
+    update_driver_stats_on_accept,
+    update_driver_stats_on_cancel,
+    update_driver_stats_on_decline,
+)
 from .serializers import (
     EstimatePriceSerializer,
     RideCancelSerializer,
@@ -25,9 +33,6 @@ from .serializers import (
 )
 
 logger = logging.getLogger(__name__)
-
-# How long a driver has to accept before we move to the next one (seconds)
-DRIVER_ACCEPT_TIMEOUT = 30
 
 
 class EstimatePriceView(APIView):
@@ -140,11 +145,20 @@ class AcceptRideView(APIView):
         profile.is_on_ride = True
         profile.save(update_fields=["is_on_ride"])
 
+        # Update scoring stats
+        update_driver_stats_on_accept(profile)
+
         # Notify passenger via WebSocket
         _notify_passenger_ws(ride, "driver_assigned", {
             "status": "accepted",
             "driver_name": request.user.full_name,
             "driver_id": request.user.id,
+            "driver_phone": request.user.phone_number,
+            "driver_photo": request.user.avatar.url if request.user.avatar else None,
+            "driver_rating": float(profile.rating_average) if profile.rating_average else None,
+            "vehicle": f"{profile.vehicle_make} {profile.vehicle_model}",
+            "vehicle_color": profile.vehicle_color,
+            "license_plate": profile.license_plate,
         })
 
         # Notify passenger via push
@@ -181,7 +195,11 @@ class DeclineRideView(APIView):
         ride.assignment_expires_at = None
         ride.save(update_fields=["declined_driver_ids", "assigned_driver", "assignment_expires_at"])
 
-        # Try next nearest driver
+        # Update scoring stats
+        if hasattr(request.user, "driver_profile"):
+            update_driver_stats_on_decline(request.user.driver_profile)
+
+        # Try next best driver
         _auto_assign_nearest_driver(ride)
 
         return Response(RideSerializer(ride).data)
@@ -316,19 +334,23 @@ class CancelRideView(APIView):
         serializer = RideCancelSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        if request.user == ride.passenger:
-            ride.status = Ride.Status.CANCELLED_BY_PASSENGER
-        else:
+        is_driver_cancel = request.user != ride.passenger
+        if is_driver_cancel:
             ride.status = Ride.Status.CANCELLED_BY_DRIVER
+        else:
+            ride.status = Ride.Status.CANCELLED_BY_PASSENGER
 
         ride.cancellation_reason = serializer.validated_data.get("reason", "")
         ride.cancelled_at = timezone.now()
         ride.save(update_fields=["status", "cancellation_reason", "cancelled_at"])
 
-        # Free up driver
+        # Free up driver and update stats
         if ride.driver and hasattr(ride.driver, "driver_profile"):
-            ride.driver.driver_profile.is_on_ride = False
-            ride.driver.driver_profile.save(update_fields=["is_on_ride"])
+            profile = ride.driver.driver_profile
+            profile.is_on_ride = False
+            profile.save(update_fields=["is_on_ride"])
+            if is_driver_cancel:
+                update_driver_stats_on_cancel(profile)
 
         return Response(RideSerializer(ride).data)
 
@@ -465,14 +487,22 @@ class DriverPendingRidesView(generics.ListAPIView):
 # Helpers
 # ---------------------------------------------------------------------------
 def _auto_assign_nearest_driver(ride):
-    """Find the nearest available driver and assign them to this ride.
+    """Find the best available driver using the scoring engine and assign them.
 
-    Sends a targeted WebSocket notification to that specific driver.
+    Uses a multi-factor scoring algorithm:
+      - ETA / distance (primary)
+      - Acceptance rate
+      - Rating
+      - Recent activity
+      - Fair distribution (anti-monopolization)
+      - Cancellation penalty
+
+    Sends a targeted WebSocket notification to the best-scoring driver.
     If no driver is available, marks ride as no_driver.
     """
     lat = float(ride.pickup_latitude)
     lng = float(ride.pickup_longitude)
-    delta = 15 / 111.0  # 15km search radius
+    delta = MAX_SEARCH_RADIUS_KM / 111.0
 
     declined = ride.declined_driver_ids or []
 
@@ -491,7 +521,6 @@ def _auto_assign_nearest_driver(ride):
         ride.assigned_driver = None
         ride.assignment_expires_at = None
         ride.save(update_fields=["status", "assigned_driver", "assignment_expires_at"])
-        # Notify passenger that no drivers are available
         _notify_passenger_ws(ride, "no_driver", {
             "status": "no_driver",
             "message": "Aucun chauffeur disponible pour le moment.",
@@ -504,64 +533,76 @@ def _auto_assign_nearest_driver(ride):
         )
         return
 
-    # Sort by real haversine distance and pick the closest
-    driver_distances = []
-    for d in drivers:
-        if d.current_latitude and d.current_longitude:
-            dist = haversine_distance(
-                lat, lng,
-                float(d.current_latitude), float(d.current_longitude),
-            )
-            driver_distances.append((d, dist))
+    # Rank drivers using the scoring engine
+    ranked = rank_drivers(drivers, lat, lng)
 
-    if not driver_distances:
+    if not ranked:
         ride.status = Ride.Status.NO_DRIVER
-        ride.save(update_fields=["status"])
+        ride.assigned_driver = None
+        ride.assignment_expires_at = None
+        ride.save(update_fields=["status", "assigned_driver", "assignment_expires_at"])
         _notify_passenger_ws(ride, "no_driver", {
             "status": "no_driver",
             "message": "Aucun chauffeur disponible pour le moment.",
         })
         return
 
-    driver_distances.sort(key=lambda x: x[1])
-    nearest_profile, distance_km = driver_distances[0]
+    best_profile, score_data = ranked[0]
+    distance_km = score_data["distance_km"]
+    eta_minutes = score_data["eta_minutes"]
+
+    logger.info(
+        "Assigning ride %s to driver %s (score=%.1f, dist=%.1fkm, eta=%.1fmin)",
+        ride.id, best_profile.user.full_name, score_data["score"],
+        distance_km, eta_minutes,
+    )
 
     # Assign this driver
-    ride.assigned_driver = nearest_profile.user
+    ride.assigned_driver = best_profile.user
     ride.assignment_expires_at = timezone.now() + timedelta(seconds=DRIVER_ACCEPT_TIMEOUT)
     ride.save(update_fields=["assigned_driver", "assignment_expires_at"])
 
     # Notify the specific driver via WebSocket
-    _send_ride_to_driver_ws(nearest_profile.user.id, ride, distance_km)
+    _send_ride_to_driver_ws(best_profile, ride, distance_km, eta_minutes)
 
     # Also send push notification
     _send_ride_notification(
-        nearest_profile.user,
+        best_profile.user,
         "Nouvelle course pour vous !",
         f"De {ride.pickup_address} à {ride.destination_address} ({distance_km:.1f} km)",
         {"ride_id": str(ride.id), "type": "new_ride_request"},
     )
 
-    # Notify passenger that a driver was found and is being requested
+    # Notify passenger — rich driver info
     _notify_passenger_ws(ride, "driver_assigned", {
         "status": "driver_requested",
         "assigned_driver": {
-            "name": nearest_profile.user.full_name,
-            "vehicle": f"{nearest_profile.vehicle_make} {nearest_profile.vehicle_model}",
-            "rating": float(nearest_profile.rating_average) if nearest_profile.rating_average else None,
+            "name": best_profile.user.full_name,
+            "photo": best_profile.user.avatar.url if best_profile.user.avatar else None,
+            "vehicle": f"{best_profile.vehicle_make} {best_profile.vehicle_model}",
+            "vehicle_color": best_profile.vehicle_color,
+            "license_plate": best_profile.license_plate,
+            "rating": float(best_profile.rating_average) if best_profile.rating_average else None,
             "distance_km": round(distance_km, 1),
+            "eta_minutes": round(eta_minutes, 1),
         },
         "expires_at": ride.assignment_expires_at.isoformat(),
         "timeout_seconds": DRIVER_ACCEPT_TIMEOUT,
     })
 
 
-def _send_ride_to_driver_ws(driver_user_id, ride, distance_km):
-    """Send ride request to a specific driver via WebSocket channel layer."""
+def _send_ride_to_driver_ws(driver_profile, ride, distance_km, eta_minutes=None):
+    """Send ride request to a specific driver via WebSocket channel layer.
+
+    Includes rich data: pickup/destination, passenger info, fare, ETA.
+    """
+    if eta_minutes is None:
+        eta_minutes = round((distance_km * 1.3 / 20) * 60, 1)
+
     try:
         channel_layer = get_channel_layer()
         async_to_sync(channel_layer.group_send)(
-            f"driver_{driver_user_id}",
+            f"driver_{driver_profile.user.id}",
             {
                 "type": "ride_request",
                 "data": {
@@ -576,6 +617,7 @@ def _send_ride_to_driver_ws(driver_user_id, ride, distance_km):
                     "distance_km": str(ride.distance_km or ""),
                     "passenger_name": ride.passenger.full_name,
                     "distance_to_pickup_km": round(distance_km, 1),
+                    "eta_to_pickup_minutes": round(eta_minutes, 1),
                     "timeout_seconds": DRIVER_ACCEPT_TIMEOUT,
                 },
             },
