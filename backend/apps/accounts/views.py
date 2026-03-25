@@ -310,6 +310,7 @@ class NearbyDriversView(APIView):
         lat = request.query_params.get("latitude")
         lng = request.query_params.get("longitude")
         radius_km = float(request.query_params.get("radius", 5))
+        vehicle_category = request.query_params.get("vehicle_category")
 
         if not lat or not lng:
             return Response(
@@ -320,13 +321,18 @@ class NearbyDriversView(APIView):
         lat, lng = float(lat), float(lng)
         # Simple bounding box filter (approximate)
         delta = radius_km / 111.0  # ~1 degree ≈ 111 km
-        drivers = DriverProfile.objects.filter(
+        qs = DriverProfile.objects.filter(
             status=DriverProfile.Status.APPROVED,
             is_online=True,
             is_on_ride=False,
             current_latitude__range=(lat - delta, lat + delta),
             current_longitude__range=(lng - delta, lng + delta),
-        ).select_related("user")[:20]
+        ).select_related("user")
+
+        if vehicle_category:
+            qs = qs.filter(vehicle_category=vehicle_category)
+
+        drivers = qs[:20]
 
         data = [
             {
@@ -339,6 +345,7 @@ class NearbyDriversView(APIView):
                 "vehicle_model": d.vehicle_model,
                 "vehicle_color": d.vehicle_color,
                 "license_plate": d.license_plate,
+                "vehicle_category": d.vehicle_category,
             }
             for d in drivers
         ]

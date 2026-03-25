@@ -1,5 +1,8 @@
 import logging
+from datetime import timedelta
 
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
 from django.conf import settings
 from django.utils import timezone
 from rest_framework import generics, permissions, status
@@ -11,7 +14,7 @@ from apps.accounts.permissions import IsApprovedDriver, IsDriver, IsPassenger
 from apps.promotions.models import PromoCode, PromoUsage
 
 from .models import Ride, RideLocationLog, SOSAlert
-from .pricing import estimate_price
+from .pricing import estimate_price, haversine_distance
 from .serializers import (
     EstimatePriceSerializer,
     RideCancelSerializer,
@@ -22,6 +25,9 @@ from .serializers import (
 )
 
 logger = logging.getLogger(__name__)
+
+# How long a driver has to accept before we move to the next one (seconds)
+DRIVER_ACCEPT_TIMEOUT = 30
 
 
 class EstimatePriceView(APIView):
@@ -87,8 +93,8 @@ class RequestRideView(APIView):
 
         ride = serializer.save(passenger=request.user)
 
-        # Find nearest driver & send notification (async in production)
-        _notify_nearby_drivers(ride)
+        # Auto-assign the nearest available driver
+        _auto_assign_nearest_driver(ride)
 
         return Response(RideSerializer(ride).data, status=status.HTTP_201_CREATED)
 
@@ -107,6 +113,13 @@ class AcceptRideView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        # Verify this driver is the one currently assigned
+        if ride.assigned_driver and ride.assigned_driver != request.user:
+            return Response(
+                {"detail": "Cette course est assignée à un autre chauffeur."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         profile = request.user.driver_profile
         if profile.is_on_ride:
             return Response(
@@ -115,20 +128,91 @@ class AcceptRideView(APIView):
             )
 
         ride.driver = request.user
+        ride.assigned_driver = None
+        ride.assignment_expires_at = None
         ride.status = Ride.Status.ACCEPTED
         ride.accepted_at = timezone.now()
-        ride.save(update_fields=["driver", "status", "accepted_at"])
+        ride.save(update_fields=[
+            "driver", "assigned_driver", "assignment_expires_at",
+            "status", "accepted_at",
+        ])
 
         profile.is_on_ride = True
         profile.save(update_fields=["is_on_ride"])
 
-        # Notify passenger
+        # Notify passenger via WebSocket
+        _notify_passenger_ws(ride, "driver_assigned", {
+            "status": "accepted",
+            "driver_name": request.user.full_name,
+            "driver_id": request.user.id,
+        })
+
+        # Notify passenger via push
         _send_ride_notification(
             ride.passenger,
             "Chauffeur trouvé !",
             f"{request.user.full_name} arrive vers vous.",
             {"ride_id": str(ride.id), "type": "ride_accepted"},
         )
+
+        return Response(RideSerializer(ride).data)
+
+
+class DeclineRideView(APIView):
+    """Driver declines a ride — reassign to next nearest driver."""
+
+    permission_classes = [permissions.IsAuthenticated, IsApprovedDriver]
+
+    def post(self, request, ride_id):
+        try:
+            ride = Ride.objects.get(id=ride_id, status=Ride.Status.REQUESTED)
+        except Ride.DoesNotExist:
+            return Response(
+                {"detail": "Course non disponible."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Record this driver as having declined
+        declined = ride.declined_driver_ids or []
+        if request.user.id not in declined:
+            declined.append(request.user.id)
+        ride.declined_driver_ids = declined
+        ride.assigned_driver = None
+        ride.assignment_expires_at = None
+        ride.save(update_fields=["declined_driver_ids", "assigned_driver", "assignment_expires_at"])
+
+        # Try next nearest driver
+        _auto_assign_nearest_driver(ride)
+
+        return Response(RideSerializer(ride).data)
+
+
+class TimeoutRideAssignmentView(APIView):
+    """Called when assignment timer expires — same as decline, auto-reassign."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, ride_id):
+        try:
+            ride = Ride.objects.get(id=ride_id, status=Ride.Status.REQUESTED)
+        except Ride.DoesNotExist:
+            return Response(
+                {"detail": "Course non disponible."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Only allow if assignment has actually expired or the caller is the passenger
+        if ride.assigned_driver:
+            declined = ride.declined_driver_ids or []
+            if ride.assigned_driver.id not in declined:
+                declined.append(ride.assigned_driver.id)
+            ride.declined_driver_ids = declined
+
+        ride.assigned_driver = None
+        ride.assignment_expires_at = None
+        ride.save(update_fields=["declined_driver_ids", "assigned_driver", "assignment_expires_at"])
+
+        _auto_assign_nearest_driver(ride)
 
         return Response(RideSerializer(ride).data)
 
@@ -380,11 +464,17 @@ class DriverPendingRidesView(generics.ListAPIView):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def _notify_nearby_drivers(ride):
-    """Send push notification to nearby drivers."""
+def _auto_assign_nearest_driver(ride):
+    """Find the nearest available driver and assign them to this ride.
+
+    Sends a targeted WebSocket notification to that specific driver.
+    If no driver is available, marks ride as no_driver.
+    """
     lat = float(ride.pickup_latitude)
     lng = float(ride.pickup_longitude)
-    delta = 5 / 111.0
+    delta = 15 / 111.0  # 15km search radius
+
+    declined = ride.declined_driver_ids or []
 
     drivers = DriverProfile.objects.filter(
         status=DriverProfile.Status.APPROVED,
@@ -392,15 +482,123 @@ def _notify_nearby_drivers(ride):
         is_on_ride=False,
         current_latitude__range=(lat - delta, lat + delta),
         current_longitude__range=(lng - delta, lng + delta),
-    ).select_related("user")[:10]
+    ).exclude(
+        user_id__in=declined,
+    ).select_related("user")
 
-    for d in drivers:
+    if not drivers.exists():
+        ride.status = Ride.Status.NO_DRIVER
+        ride.assigned_driver = None
+        ride.assignment_expires_at = None
+        ride.save(update_fields=["status", "assigned_driver", "assignment_expires_at"])
+        # Notify passenger that no drivers are available
+        _notify_passenger_ws(ride, "no_driver", {
+            "status": "no_driver",
+            "message": "Aucun chauffeur disponible pour le moment.",
+        })
         _send_ride_notification(
-            d.user,
-            "Nouvelle course disponible",
-            f"De {ride.pickup_address} à {ride.destination_address}",
-            {"ride_id": str(ride.id), "type": "new_ride_request"},
+            ride.passenger,
+            "Aucun chauffeur disponible",
+            "Réessayez dans quelques instants.",
+            {"ride_id": str(ride.id), "type": "no_driver"},
         )
+        return
+
+    # Sort by real haversine distance and pick the closest
+    driver_distances = []
+    for d in drivers:
+        if d.current_latitude and d.current_longitude:
+            dist = haversine_distance(
+                lat, lng,
+                float(d.current_latitude), float(d.current_longitude),
+            )
+            driver_distances.append((d, dist))
+
+    if not driver_distances:
+        ride.status = Ride.Status.NO_DRIVER
+        ride.save(update_fields=["status"])
+        _notify_passenger_ws(ride, "no_driver", {
+            "status": "no_driver",
+            "message": "Aucun chauffeur disponible pour le moment.",
+        })
+        return
+
+    driver_distances.sort(key=lambda x: x[1])
+    nearest_profile, distance_km = driver_distances[0]
+
+    # Assign this driver
+    ride.assigned_driver = nearest_profile.user
+    ride.assignment_expires_at = timezone.now() + timedelta(seconds=DRIVER_ACCEPT_TIMEOUT)
+    ride.save(update_fields=["assigned_driver", "assignment_expires_at"])
+
+    # Notify the specific driver via WebSocket
+    _send_ride_to_driver_ws(nearest_profile.user.id, ride, distance_km)
+
+    # Also send push notification
+    _send_ride_notification(
+        nearest_profile.user,
+        "Nouvelle course pour vous !",
+        f"De {ride.pickup_address} à {ride.destination_address} ({distance_km:.1f} km)",
+        {"ride_id": str(ride.id), "type": "new_ride_request"},
+    )
+
+    # Notify passenger that a driver was found and is being requested
+    _notify_passenger_ws(ride, "driver_assigned", {
+        "status": "driver_requested",
+        "assigned_driver": {
+            "name": nearest_profile.user.full_name,
+            "vehicle": f"{nearest_profile.vehicle_make} {nearest_profile.vehicle_model}",
+            "rating": float(nearest_profile.rating_average) if nearest_profile.rating_average else None,
+            "distance_km": round(distance_km, 1),
+        },
+        "expires_at": ride.assignment_expires_at.isoformat(),
+        "timeout_seconds": DRIVER_ACCEPT_TIMEOUT,
+    })
+
+
+def _send_ride_to_driver_ws(driver_user_id, ride, distance_km):
+    """Send ride request to a specific driver via WebSocket channel layer."""
+    try:
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            f"driver_{driver_user_id}",
+            {
+                "type": "ride_request",
+                "data": {
+                    "id": str(ride.id),
+                    "pickup_address": ride.pickup_address,
+                    "pickup_latitude": str(ride.pickup_latitude),
+                    "pickup_longitude": str(ride.pickup_longitude),
+                    "destination_address": ride.destination_address,
+                    "destination_latitude": str(ride.destination_latitude),
+                    "destination_longitude": str(ride.destination_longitude),
+                    "estimated_price": str(ride.estimated_price),
+                    "distance_km": str(ride.distance_km or ""),
+                    "passenger_name": ride.passenger.full_name,
+                    "distance_to_pickup_km": round(distance_km, 1),
+                    "timeout_seconds": DRIVER_ACCEPT_TIMEOUT,
+                },
+            },
+        )
+    except Exception:
+        logger.exception("Failed to send ride request to driver via WS")
+
+
+def _notify_passenger_ws(ride, event_type, data):
+    """Send real-time update to the passenger via the ride tracking WebSocket."""
+    try:
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            f"ride_{ride.id}",
+            {
+                "type": "status.update",
+                "status": event_type,
+                "message": "",
+                **data,
+            },
+        )
+    except Exception:
+        logger.exception("Failed to send WS notification to passenger")
 
 
 def _send_ride_notification(user, title, body, data=None, admin_alert=False):

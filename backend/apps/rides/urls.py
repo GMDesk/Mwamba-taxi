@@ -10,6 +10,8 @@ urlpatterns = [
     # Ride lifecycle
     path("request/", views.RequestRideView.as_view(), name="request-ride"),
     path("<uuid:ride_id>/accept/", views.AcceptRideView.as_view(), name="accept-ride"),
+    path("<uuid:ride_id>/decline/", views.DeclineRideView.as_view(), name="decline-ride"),
+    path("<uuid:ride_id>/timeout/", views.TimeoutRideAssignmentView.as_view(), name="timeout-ride"),
     path("<uuid:ride_id>/start/", views.StartRideView.as_view(), name="start-ride"),
     path("<uuid:ride_id>/complete/", views.CompleteRideView.as_view(), name="complete-ride"),
     path("<uuid:ride_id>/cancel/", views.CancelRideView.as_view(), name="cancel-ride"),

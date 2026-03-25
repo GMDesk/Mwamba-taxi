@@ -39,7 +39,8 @@ class DriverProfileSerializer(serializers.ModelSerializer):
         model = DriverProfile
         fields = [
             "id", "user", "vehicle_make", "vehicle_model", "vehicle_year",
-            "vehicle_color", "license_plate", "drivers_license_photo",
+            "vehicle_color", "license_plate", "vehicle_category",
+            "drivers_license_photo",
             "vehicle_registration_photo", "vehicle_photo",
             "status", "is_online", "is_on_ride",
             "current_latitude", "current_longitude",
@@ -66,6 +67,11 @@ class DriverRegistrationSerializer(serializers.Serializer):
     vehicle_year = serializers.IntegerField(required=False)
     vehicle_color = serializers.CharField(max_length=30, required=False, allow_blank=True)
     license_plate = serializers.CharField(max_length=20)
+    vehicle_category = serializers.ChoiceField(
+        choices=['economy', 'comfort', 'van'],
+        default='economy',
+        required=False,
+    )
 
     # Documents (optional at registration, can be uploaded later)
     drivers_license_photo = serializers.ImageField(required=False, allow_null=True)
@@ -95,7 +101,7 @@ class DriverRegistrationSerializer(serializers.Serializer):
             k: validated_data[k]
             for k in [
                 "vehicle_make", "vehicle_model", "vehicle_year",
-                "vehicle_color", "license_plate",
+                "vehicle_color", "license_plate", "vehicle_category",
                 "drivers_license_photo", "vehicle_registration_photo",
                 "vehicle_photo",
             ]

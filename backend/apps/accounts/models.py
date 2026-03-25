@@ -96,6 +96,11 @@ class DriverProfile(models.Model):
         REJECTED = "rejected", "Rejeté"
         SUSPENDED = "suspended", "Suspendu"
 
+    class VehicleCategory(models.TextChoices):
+        ECONOMY = "economy", "Économie"
+        COMFORT = "comfort", "Confort"
+        VAN = "van", "Van"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
@@ -108,6 +113,12 @@ class DriverProfile(models.Model):
     vehicle_year = models.PositiveIntegerField("Année du véhicule", null=True, blank=True)
     vehicle_color = models.CharField("Couleur véhicule", max_length=30)
     license_plate = models.CharField("Plaque d'immatriculation", max_length=20, unique=True)
+    vehicle_category = models.CharField(
+        "Catégorie véhicule",
+        max_length=10,
+        choices=VehicleCategory.choices,
+        default=VehicleCategory.ECONOMY,
+    )
 
     # Documents
     drivers_license_photo = models.ImageField(

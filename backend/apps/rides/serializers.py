@@ -18,21 +18,34 @@ class RideCreateSerializer(serializers.ModelSerializer):
 class RideSerializer(serializers.ModelSerializer):
     passenger = UserSerializer(read_only=True)
     driver = UserSerializer(read_only=True)
+    assigned_driver_info = serializers.SerializerMethodField()
     driver_vehicle = serializers.SerializerMethodField()
 
     class Meta:
         model = Ride
         fields = [
-            "id", "passenger", "driver", "driver_vehicle",
+            "id", "passenger", "driver", "assigned_driver_info", "driver_vehicle",
             "pickup_address", "pickup_latitude", "pickup_longitude",
             "destination_address", "destination_latitude", "destination_longitude",
             "distance_km", "estimated_duration_minutes",
             "estimated_price", "final_price", "discount_amount",
             "commission_amount", "driver_earnings",
             "status", "cancellation_reason",
+            "assignment_expires_at",
             "requested_at", "accepted_at", "started_at",
             "completed_at", "cancelled_at",
         ]
+
+    def get_assigned_driver_info(self, obj):
+        if obj.assigned_driver and hasattr(obj.assigned_driver, "driver_profile"):
+            p = obj.assigned_driver.driver_profile
+            return {
+                "id": obj.assigned_driver.id,
+                "name": obj.assigned_driver.full_name,
+                "vehicle": f"{p.vehicle_make} {p.vehicle_model}",
+                "rating": float(p.rating_average) if p.rating_average else None,
+            }
+        return None
 
     def get_driver_vehicle(self, obj):
         if obj.driver and hasattr(obj.driver, "driver_profile"):

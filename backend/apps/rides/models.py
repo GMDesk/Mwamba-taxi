@@ -1,6 +1,7 @@
 import uuid
 
 from django.conf import settings
+from django.contrib.postgres.fields import ArrayField
 from django.db import models
 
 
@@ -15,6 +16,7 @@ class Ride(models.Model):
         COMPLETED = "completed", "Terminée"
         CANCELLED_BY_PASSENGER = "cancelled_passenger", "Annulée par passager"
         CANCELLED_BY_DRIVER = "cancelled_driver", "Annulée par chauffeur"
+        NO_DRIVER = "no_driver", "Aucun chauffeur disponible"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     passenger = models.ForeignKey(
@@ -88,6 +90,23 @@ class Ride(models.Model):
     )
     discount_amount = models.DecimalField(
         "Réduction", max_digits=10, decimal_places=2, default=0.00
+    )
+
+    # Auto-assignment
+    assigned_driver = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="rides_assigned",
+        verbose_name="Chauffeur assigné",
+        help_text="Currently assigned driver (pending acceptance)",
+    )
+    assignment_expires_at = models.DateTimeField(
+        "Expiration assignation", null=True, blank=True
+    )
+    declined_driver_ids = models.JSONField(
+        "Chauffeurs ayant décliné", default=list, blank=True
     )
 
     # Timestamps

@@ -122,11 +122,13 @@ class RideTrackingConsumer(AsyncWebsocketConsumer):
         }))
 
     async def status_update(self, event):
-        await self.send(text_data=json.dumps({
-            "type": "status_update",
-            "status": event["status"],
-            "message": event.get("message", ""),
-        }))
+        # Forward all fields from the event (status, message, assigned_driver, etc.)
+        payload = {"type": "status_update"}
+        for key in ("status", "message", "assigned_driver", "expires_at",
+                     "timeout_seconds", "driver_name", "driver_id"):
+            if key in event:
+                payload[key] = event[key]
+        await self.send(text_data=json.dumps(payload))
 
     @database_sync_to_async
     def _is_ride_participant(self, user_id, ride_id):
