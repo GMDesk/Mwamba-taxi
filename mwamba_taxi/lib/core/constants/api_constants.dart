@@ -29,6 +29,8 @@ class ApiConstants {
   static const String estimatePrice = '/rides/estimate/';
   static const String requestRide = '/rides/request/';
   static String acceptRide(String id) => '/rides/$id/accept/';
+  static String declineRide(String id) => '/rides/$id/decline/';
+  static String timeoutRide(String id) => '/rides/$id/timeout/';
   static String startRide(String id) => '/rides/$id/start/';
   static String completeRide(String id) => '/rides/$id/complete/';
   static String cancelRide(String id) => '/rides/$id/cancel/';
@@ -37,10 +39,12 @@ class ApiConstants {
   static String rideSos(String id) => '/rides/$id/sos/';
   static const String passengerHistory = '/rides/history/passenger/';
 
-  // Payments
-  static const String initiatePayment = '/payments/initiate/';
-  static String paymentStatus(String id) => '/payments/$id/status/';
+  // Payments / Wallet
+  static const String wallet = '/payments/wallet/';
+  static const String walletTransactions = '/payments/wallet/transactions/';
+  static const String walletDeposit = '/payments/wallet/deposit/';
   static const String paymentHistory = '/payments/history/';
+  static String paymentStatus(String id) => '/payments/$id/status/';
 
   // Notifications
   static const String notifications = '/notifications/';

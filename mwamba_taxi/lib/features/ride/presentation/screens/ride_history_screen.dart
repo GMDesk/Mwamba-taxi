@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:go_router/go_router.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 
 import '../../../../core/constants/api_constants.dart';
+import '../../../../core/constants/app_strings.dart';
 import '../../../../core/di/injection.dart';
 import '../../../../core/network/api_client.dart';
 import '../../../../core/theme/app_colors.dart';
@@ -139,7 +141,10 @@ class _RideHistoryScreenState extends State<RideHistoryScreen> {
                                 separatorBuilder: (_, __) => SizedBox(height: 12.h),
                                 itemBuilder: (context, index) {
                                   final ride = _rides[index];
-                                  return _RideCard(ride: ride);
+                                  return _RideCard(
+                                    ride: ride,
+                                    onReorder: () => _reorderRide(ride),
+                                  );
                                 },
                               ),
                             ),
@@ -149,12 +154,47 @@ class _RideHistoryScreenState extends State<RideHistoryScreen> {
       ),
     );
   }
+
+  Future<void> _reorderRide(Map<String, dynamic> ride) async {
+    try {
+      final response = await _api.dio.post(
+        ApiConstants.requestRide,
+        data: {
+          'pickup_address': ride['pickup_address'] ?? 'Ma position',
+          'pickup_latitude': ride['pickup_latitude'],
+          'pickup_longitude': ride['pickup_longitude'],
+          'destination_address': ride['destination_address'] ?? 'Destination',
+          'destination_latitude': ride['destination_latitude'],
+          'destination_longitude': ride['destination_longitude'],
+          'estimated_price': ride['estimated_fare'] ?? ride['final_fare'] ?? '0',
+          'distance_km': ride['distance_km'] ?? '0',
+          'estimated_duration_minutes': ride['estimated_duration_minutes'] ?? 15,
+          'vehicle_category': ride['vehicle_category'] ?? 'economy',
+        },
+      );
+
+      final rideId = response.data['id'];
+      if (mounted) {
+        context.push('/ride/$rideId');
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erreur lors de la commande: $e'),
+            backgroundColor: AppColors.error,
+          ),
+        );
+      }
+    }
+  }
 }
 
 class _RideCard extends StatelessWidget {
   final Map<String, dynamic> ride;
+  final VoidCallback? onReorder;
 
-  const _RideCard({required this.ride});
+  const _RideCard({required this.ride, this.onReorder});
 
   @override
   Widget build(BuildContext context) {
@@ -251,17 +291,46 @@ class _RideCard extends StatelessWidget {
             ],
           ),
 
-          // Fare
+          // Fare + Reorder
           if (fare != null) ...[
             SizedBox(height: 14.h),
             Divider(color: AppColors.divider, height: 1),
             SizedBox(height: 12.h),
             Row(
-              mainAxisAlignment: MainAxisAlignment.end,
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
+                // Re-order button (only for completed rides)
+                if (status == 'completed' && onReorder != null)
+                  GestureDetector(
+                    onTap: onReorder,
+                    child: Container(
+                      padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 8.h),
+                      decoration: BoxDecoration(
+                        color: AppColors.primary.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(12.r),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.replay_rounded, size: 16.sp, color: AppColors.primary),
+                          SizedBox(width: 6.w),
+                          Text(
+                            AppStrings.reorder,
+                            style: GoogleFonts.poppins(
+                              fontSize: 12.sp,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.primary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                else
+                  const SizedBox.shrink(),
                 Text(
                   '${NumberFormat('#,###').format(double.tryParse(fare.toString()) ?? 0)} CDF',
-                  style: TextStyle(
+                  style: GoogleFonts.poppins(
                     fontSize: 17.sp,
                     fontWeight: FontWeight.w700,
                     color: AppColors.primaryDark,

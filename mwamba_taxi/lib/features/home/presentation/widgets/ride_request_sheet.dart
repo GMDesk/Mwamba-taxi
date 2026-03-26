@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/constants/app_strings.dart';
@@ -8,6 +9,8 @@ class RideRequestSheet extends StatelessWidget {
   final String pickupAddress;
   final String destinationAddress;
   final Map<String, dynamic> priceEstimate;
+  final String vehicleType;
+  final String paymentMethod;
   final VoidCallback onConfirm;
 
   const RideRequestSheet({
@@ -15,14 +18,46 @@ class RideRequestSheet extends StatelessWidget {
     required this.pickupAddress,
     required this.destinationAddress,
     required this.priceEstimate,
+    required this.vehicleType,
+    required this.paymentMethod,
     required this.onConfirm,
   });
+
+  IconData _vehicleIcon() {
+    switch (vehicleType) {
+      case 'economy': return Icons.directions_car_rounded;
+      case 'comfort': return Icons.airline_seat_recline_extra_rounded;
+      case 'moto': return Icons.two_wheeler_rounded;
+      case 'van': return Icons.airport_shuttle_rounded;
+      default: return Icons.directions_car_rounded;
+    }
+  }
+
+  String _vehicleLabel() {
+    switch (vehicleType) {
+      case 'economy': return AppStrings.vehicleStandard;
+      case 'comfort': return AppStrings.vehicleComfort;
+      case 'moto': return AppStrings.vehicleMoto;
+      case 'van': return AppStrings.vehicleGroup;
+      default: return vehicleType;
+    }
+  }
+
+  String _paymentLabel() {
+    switch (paymentMethod) {
+      case 'cash': return AppStrings.cash;
+      case 'mpesa': return AppStrings.mpesa;
+      case 'airtel': return AppStrings.airtelMoney;
+      case 'orange': return AppStrings.orangeMoney;
+      default: return paymentMethod;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final price = priceEstimate['estimated_price'];
     final distance = priceEstimate['distance_km'];
-    final duration = priceEstimate['estimated_duration_minutes'];
+    final duration = (priceEstimate['estimated_duration_minutes'] as num).toInt();
 
     return Container(
       padding: EdgeInsets.fromLTRB(24.w, 16.h, 24.w, 28.h),
@@ -45,75 +80,231 @@ class RideRequestSheet extends StatelessWidget {
               ),
             ),
           ),
-          SizedBox(height: 20.h),
+          SizedBox(height: 16.h),
+
+          // Title
+          Text(
+            'Confirmer votre course',
+            style: GoogleFonts.poppins(
+              fontSize: 18.sp,
+              fontWeight: FontWeight.w700,
+              color: AppColors.textPrimary,
+            ),
+          ),
+          SizedBox(height: 16.h),
 
           // Route info
+          Container(
+            padding: EdgeInsets.all(14.w),
+            decoration: BoxDecoration(
+              color: AppColors.inputFill,
+              borderRadius: BorderRadius.circular(16.r),
+            ),
+            child: Row(
+              children: [
+                Column(
+                  children: [
+                    Container(
+                      width: 10.w,
+                      height: 10.w,
+                      decoration: BoxDecoration(
+                        color: AppColors.primary,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    Container(width: 1.5, height: 28.h, color: AppColors.border),
+                    Icon(Icons.location_on, color: AppColors.error, size: 14.sp),
+                  ],
+                ),
+                SizedBox(width: 12.w),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        pickupAddress,
+                        style: GoogleFonts.poppins(
+                          fontSize: 13.sp,
+                          fontWeight: FontWeight.w500,
+                          color: AppColors.textPrimary,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      SizedBox(height: 18.h),
+                      Text(
+                        destinationAddress,
+                        style: GoogleFonts.poppins(
+                          fontSize: 13.sp,
+                          fontWeight: FontWeight.w500,
+                          color: AppColors.textPrimary,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          SizedBox(height: 14.h),
+
+          // Vehicle + Payment row
           Row(
             children: [
-              Column(
-                children: [
-                  Icon(Icons.circle, color: AppColors.primary, size: 12.sp),
-                  Container(
-                    width: 2,
-                    height: 30.h,
-                    color: AppColors.border,
-                  ),
-                  Icon(Icons.location_on, color: AppColors.error, size: 16.sp),
-                ],
-              ),
-              SizedBox(width: 12.w),
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      pickupAddress,
-                      style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w500),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    SizedBox(height: 20.h),
-                    Text(
-                      destinationAddress,
-                      style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w500),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
+                child: Container(
+                  padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 10.h),
+                  decoration: BoxDecoration(
+                    color: AppColors.primary.withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(14.r),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(_vehicleIcon(), size: 20.sp, color: AppColors.primary),
+                      SizedBox(width: 8.w),
+                      Text(
+                        _vehicleLabel(),
+                        style: GoogleFonts.poppins(
+                          fontSize: 13.sp,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.primaryDark,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              SizedBox(width: 10.w),
+              Expanded(
+                child: Container(
+                  padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 10.h),
+                  decoration: BoxDecoration(
+                    color: AppColors.inputFill,
+                    borderRadius: BorderRadius.circular(14.r),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        paymentMethod == 'cash' ? Icons.money_rounded : Icons.phone_android_rounded,
+                        size: 20.sp,
+                        color: AppColors.textSecondary,
+                      ),
+                      SizedBox(width: 8.w),
+                      Text(
+                        _paymentLabel(),
+                        style: GoogleFonts.poppins(
+                          fontSize: 13.sp,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: 14.h),
+
+          // Price & details
+          Row(
+            children: [
+              Expanded(
+                child: Container(
+                  padding: EdgeInsets.symmetric(vertical: 14.h),
+                  decoration: BoxDecoration(
+                    color: AppColors.primary.withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(14.r),
+                  ),
+                  child: Column(
+                    children: [
+                      Text(
+                        '$price CDF',
+                        style: GoogleFonts.poppins(
+                          fontSize: 18.sp,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.primaryDark,
+                        ),
+                      ),
+                      SizedBox(height: 2.h),
+                      Text(
+                        AppStrings.estimatedPrice,
+                        style: GoogleFonts.poppins(
+                          fontSize: 11.sp,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              SizedBox(width: 8.w),
+              Expanded(
+                child: Container(
+                  padding: EdgeInsets.symmetric(vertical: 14.h),
+                  decoration: BoxDecoration(
+                    color: AppColors.inputFill,
+                    borderRadius: BorderRadius.circular(14.r),
+                  ),
+                  child: Column(
+                    children: [
+                      Text(
+                        '$distance km',
+                        style: GoogleFonts.poppins(
+                          fontSize: 16.sp,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                      SizedBox(height: 2.h),
+                      Text(
+                        'Distance',
+                        style: GoogleFonts.poppins(
+                          fontSize: 11.sp,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              SizedBox(width: 8.w),
+              Expanded(
+                child: Container(
+                  padding: EdgeInsets.symmetric(vertical: 14.h),
+                  decoration: BoxDecoration(
+                    color: AppColors.inputFill,
+                    borderRadius: BorderRadius.circular(14.r),
+                  ),
+                  child: Column(
+                    children: [
+                      Text(
+                        '$duration min',
+                        style: GoogleFonts.poppins(
+                          fontSize: 16.sp,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                      SizedBox(height: 2.h),
+                      Text(
+                        'Durée',
+                        style: GoogleFonts.poppins(
+                          fontSize: 11.sp,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ],
           ),
           SizedBox(height: 20.h),
 
-          // Divider
-          const Divider(),
-          SizedBox(height: 12.h),
-
-          // Price & details
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              _InfoChip(
-                icon: Icons.attach_money,
-                label: '$price CDF',
-                subtitle: AppStrings.estimatedPrice,
-              ),
-              _InfoChip(
-                icon: Icons.straighten,
-                label: '$distance km',
-                subtitle: 'Distance',
-              ),
-              _InfoChip(
-                icon: Icons.access_time,
-                label: '$duration min',
-                subtitle: 'Durée',
-              ),
-            ],
-          ),
-          SizedBox(height: 24.h),
-
-          // Confirm button — ambre accrocheur
+          // Confirm button
           SizedBox(
             width: double.infinity,
             height: 56.h,
@@ -127,7 +318,7 @@ class RideRequestSheet extends StatelessWidget {
                 borderRadius: BorderRadius.circular(18.r),
                 boxShadow: [
                   BoxShadow(
-                    color: AppColors.primaryDark.withOpacity(0.4),
+                    color: AppColors.primaryDark.withOpacity(0.3),
                     blurRadius: 16,
                     offset: const Offset(0, 6),
                   ),
@@ -141,19 +332,14 @@ class RideRequestSheet extends StatelessWidget {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(
-                        Icons.local_taxi_rounded,
-                        color: AppColors.textOnSecondary,
-                        size: 22.sp,
-                      ),
+                      Icon(Icons.local_taxi_rounded, color: Colors.white, size: 22.sp),
                       SizedBox(width: 10.w),
                       Text(
-                        AppStrings.requestRide,
-                        style: TextStyle(
-                          fontWeight: FontWeight.w700,
+                        AppStrings.orderRide,
+                        style: GoogleFonts.poppins(
                           fontSize: 16.sp,
-                          letterSpacing: 0.2,
-                          color: AppColors.textOnSecondary,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white,
                         ),
                       ),
                     ],
@@ -164,50 +350,6 @@ class RideRequestSheet extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-}
-
-class _InfoChip extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final String subtitle;
-
-  const _InfoChip({
-    required this.icon,
-    required this.label,
-    required this.subtitle,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Container(
-          padding: EdgeInsets.all(10.w),
-          decoration: BoxDecoration(
-            color: AppColors.primary.withOpacity(0.12),
-            borderRadius: BorderRadius.circular(12.r),
-          ),
-          child: Icon(icon, color: AppColors.primaryDark, size: 22.sp),
-        ),
-        SizedBox(height: 4.h),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 16.sp,
-            fontWeight: FontWeight.w700,
-            color: AppColors.textPrimary,
-          ),
-        ),
-        Text(
-          subtitle,
-          style: TextStyle(
-            fontSize: 11.sp,
-            color: AppColors.textSecondary,
-          ),
-        ),
-      ],
     );
   }
 }

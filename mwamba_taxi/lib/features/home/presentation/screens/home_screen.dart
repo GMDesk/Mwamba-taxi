@@ -14,6 +14,7 @@ import '../../../../core/di/injection.dart';
 import '../../../../core/network/api_client.dart';
 import '../../../../core/services/places_service.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/utils/car_marker_icon.dart';
 import '../widgets/destination_search_sheet.dart';
 import '../widgets/ride_request_sheet.dart';
 
@@ -24,7 +25,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
   final Completer<GoogleMapController> _mapController = Completer();
   final ApiClient _api = getIt<ApiClient>();
   final PlacesService _placesService = PlacesService();
@@ -45,46 +46,81 @@ class _HomeScreenState extends State<HomeScreen> {
   int _selectedVehicle = 0;
   int _selectedRideType = 0;
 
+  // Payment method: 0=cash, 1=mpesa, 2=airtel, 3=orange
+  int _selectedPayment = 0;
+
+  // Vehicle categories mapping to backend
+  static const _vehicleCategories = ['economy', 'comfort', 'moto', 'van'];
+
+  BitmapDescriptor _carIcon = BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen);
+  Timer? _driverRefreshTimer;
+
+  // CTA animation
+  late AnimationController _ctaAnimController;
+  late Animation<double> _ctaScaleAnim;
+
   @override
   void initState() {
     super.initState();
+    _ctaAnimController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 300),
+    );
+    _ctaScaleAnim = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _ctaAnimController, curve: Curves.easeOutBack),
+    );
+    _createCarIcon();
     _getCurrentLocation();
+    _driverRefreshTimer = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => _loadNearbyDrivers(),
+    );
+  }
+
+  @override
+  void dispose() {
+    _driverRefreshTimer?.cancel();
+    _ctaAnimController.dispose();
+    super.dispose();
+  }
+
+  /// Loads the professional car marker icon.
+  Future<void> _createCarIcon() async {
+    final icon = await createCarMarkerIcon();
+    if (mounted) {
+      setState(() => _carIcon = icon);
+      // Reload markers with the new icon
+      _loadNearbyDrivers();
+    }
   }
 
   Future<void> _getCurrentLocation() async {
     try {
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        setState(() => _isLoading = false);
-        return;
+      if (serviceEnabled) {
+        LocationPermission permission = await Geolocator.checkPermission();
+        if (permission == LocationPermission.denied) {
+          permission = await Geolocator.requestPermission();
+        }
+
+        if (permission == LocationPermission.always ||
+            permission == LocationPermission.whileInUse) {
+          final position = await Geolocator.getCurrentPosition(
+            desiredAccuracy: LocationAccuracy.high,
+          );
+          setState(() {
+            _currentPosition = LatLng(position.latitude, position.longitude);
+            _pickupLocation = _currentPosition;
+            _pickupAddress = AppStrings.myLocation;
+          });
+          _animateToPosition(_currentPosition);
+        }
       }
-
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-      }
-
-      if (permission == LocationPermission.deniedForever ||
-          permission == LocationPermission.denied) {
-        setState(() => _isLoading = false);
-        return;
-      }
-
-      final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-      );
-
-      setState(() {
-        _currentPosition = LatLng(position.latitude, position.longitude);
-        _pickupLocation = _currentPosition;
-        _pickupAddress = AppStrings.myLocation;
-        _isLoading = false;
-      });
-
-      _animateToPosition(_currentPosition);
-      _loadNearbyDrivers();
     } catch (e) {
+      debugPrint('Error getting location: $e');
+    } finally {
       setState(() => _isLoading = false);
+      _loadNearbyDrivers();
     }
   }
 
@@ -159,19 +195,24 @@ class _HomeScreenState extends State<HomeScreen> {
         queryParameters: {
           'latitude': _currentPosition.latitude,
           'longitude': _currentPosition.longitude,
-          'radius': 5,
+          'radius': 15,
+          'vehicle_category': _vehicleCategories[_selectedVehicle],
         },
       );
 
       final drivers = response.data as List;
       final driverMarkers = drivers.map((d) {
+        final heading = double.tryParse(d['heading']?.toString() ?? '') ?? 0;
         return Marker(
-          markerId: MarkerId(d['id']),
+          markerId: MarkerId('driver_${d['id']}'),
           position: LatLng(
             double.parse(d['latitude']),
             double.parse(d['longitude']),
           ),
-          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+          icon: _carIcon,
+          rotation: heading,
+          anchor: const Offset(0.5, 0.5),
+          flat: true,
           infoWindow: InfoWindow(
             title: d['driver_name'],
             snippet: '${d['vehicle_make']} ${d['vehicle_model']} ⭐${d['rating']}',
@@ -183,7 +224,9 @@ class _HomeScreenState extends State<HomeScreen> {
         _markers.removeWhere((m) => m.markerId.value.startsWith('driver_'));
         _markers.addAll(driverMarkers);
       });
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Error loading nearby drivers: $e');
+    }
   }
 
   Future<void> _estimatePrice() async {
@@ -234,6 +277,8 @@ class _HomeScreenState extends State<HomeScreen> {
           'estimated_price': _priceEstimate!['estimated_price'],
           'distance_km': _priceEstimate!['distance_km'],
           'estimated_duration_minutes': (_priceEstimate!['estimated_duration_minutes'] as num).toInt(),
+          'vehicle_category': _vehicleCategories[_selectedVehicle],
+          'payment_method': ['cash', 'mpesa', 'airtel', 'orange'][_selectedPayment],
         },
       );
 
@@ -306,7 +351,9 @@ class _HomeScreenState extends State<HomeScreen> {
             ));
           });
           Navigator.pop(context);
-          // Draw route then estimate price
+          // Animate CTA button in
+          _ctaAnimController.forward();
+          // Draw route
           if (_pickupLocation != null) {
             await _drawRoute(_pickupLocation!, latLng);
           }
@@ -324,6 +371,8 @@ class _HomeScreenState extends State<HomeScreen> {
         pickupAddress: _pickupAddress,
         destinationAddress: _destinationAddress,
         priceEstimate: _priceEstimate!,
+        vehicleType: _vehicleCategories[_selectedVehicle],
+        paymentMethod: ['cash', 'mpesa', 'airtel', 'orange'][_selectedPayment],
         onConfirm: () {
           Navigator.pop(context);
           _requestRide();
@@ -492,9 +541,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
           // ── Scrollable bottom sheet ──
           DraggableScrollableSheet(
-            initialChildSize: 0.38,
+            initialChildSize: 0.42,
             minChildSize: 0.15,
-            maxChildSize: 0.55,
+            maxChildSize: 0.70,
             builder: (context, scrollController) {
               return Container(
                 decoration: BoxDecoration(
@@ -571,10 +620,10 @@ class _HomeScreenState extends State<HomeScreen> {
                         children: [
                           _VehicleCard(
                             icon: Icons.directions_car_rounded,
-                            title: AppStrings.vehicleEconomy,
-                            subtitle: AppStrings.vehicleEconomyDesc,
+                            title: AppStrings.vehicleStandard,
+                            subtitle: AppStrings.vehicleStandardDesc,
                             isSelected: _selectedVehicle == 0,
-                            onTap: () => setState(() => _selectedVehicle = 0),
+                            onTap: () { setState(() => _selectedVehicle = 0); _loadNearbyDrivers(); },
                           ),
                           SizedBox(width: 10.w),
                           _VehicleCard(
@@ -582,82 +631,239 @@ class _HomeScreenState extends State<HomeScreen> {
                             title: AppStrings.vehicleComfort,
                             subtitle: AppStrings.vehicleComfortDesc,
                             isSelected: _selectedVehicle == 1,
-                            onTap: () => setState(() => _selectedVehicle = 1),
+                            onTap: () { setState(() => _selectedVehicle = 1); _loadNearbyDrivers(); },
+                          ),
+                          SizedBox(width: 10.w),
+                          _VehicleCard(
+                            icon: Icons.two_wheeler_rounded,
+                            title: AppStrings.vehicleMoto,
+                            subtitle: AppStrings.vehicleMotoDesc,
+                            isSelected: _selectedVehicle == 2,
+                            onTap: () { setState(() => _selectedVehicle = 2); _loadNearbyDrivers(); },
                           ),
                           SizedBox(width: 10.w),
                           _VehicleCard(
                             icon: Icons.airport_shuttle_rounded,
-                            title: AppStrings.vehicleVan,
-                            subtitle: AppStrings.vehicleVanDesc,
-                            isSelected: _selectedVehicle == 2,
-                            onTap: () => setState(() => _selectedVehicle = 2),
+                            title: AppStrings.vehicleGroup,
+                            subtitle: AppStrings.vehicleGroupDesc,
+                            isSelected: _selectedVehicle == 3,
+                            onTap: () { setState(() => _selectedVehicle = 3); _loadNearbyDrivers(); },
                           ),
                         ],
                       ),
                     ),
-                    SizedBox(height: 20.h),
+                    SizedBox(height: 14.h),
 
-                    // CTA button
+                    // Payment method selector
                     Padding(
                       padding: EdgeInsets.symmetric(horizontal: 20.w),
-                      child: Container(
-                        width: double.infinity,
-                        decoration: BoxDecoration(
-                          gradient: const LinearGradient(
-                            colors: AppColors.ctaGradient,
-                            begin: Alignment.centerLeft,
-                            end: Alignment.centerRight,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            AppStrings.paymentMethod,
+                            style: GoogleFonts.poppins(
+                              fontSize: 14.sp,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.textPrimary,
+                            ),
                           ),
-                          borderRadius: BorderRadius.circular(18.r),
-                          boxShadow: [
-                            BoxShadow(
-                              color: AppColors.primaryDark.withOpacity(0.35),
-                              blurRadius: 18,
-                              offset: const Offset(0, 6),
+                          SizedBox(height: 8.h),
+                          Row(
+                            children: [
+                              _PaymentPill(
+                                label: AppStrings.cash,
+                                icon: Icons.money_rounded,
+                                isActive: _selectedPayment == 0,
+                                onTap: () => setState(() => _selectedPayment = 0),
+                              ),
+                              SizedBox(width: 8.w),
+                              _PaymentPill(
+                                label: 'M-Pesa',
+                                icon: Icons.phone_android_rounded,
+                                isActive: _selectedPayment == 1,
+                                onTap: () => setState(() => _selectedPayment = 1),
+                              ),
+                              SizedBox(width: 8.w),
+                              _PaymentPill(
+                                label: 'Airtel',
+                                icon: Icons.phone_android_rounded,
+                                isActive: _selectedPayment == 2,
+                                onTap: () => setState(() => _selectedPayment = 2),
+                              ),
+                              SizedBox(width: 8.w),
+                              _PaymentPill(
+                                label: 'Orange',
+                                icon: Icons.phone_android_rounded,
+                                isActive: _selectedPayment == 3,
+                                onTap: () => setState(() => _selectedPayment = 3),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    SizedBox(height: 14.h),
+
+                    // Destination summary (when selected)
+                    if (_destinationLocation != null)
+                      Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 20.w),
+                        child: Container(
+                          padding: EdgeInsets.all(12.w),
+                          decoration: BoxDecoration(
+                            color: AppColors.success.withOpacity(0.08),
+                            borderRadius: BorderRadius.circular(14.r),
+                            border: Border.all(color: AppColors.success.withOpacity(0.2)),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(Icons.location_on_rounded, color: AppColors.success, size: 20.sp),
+                              SizedBox(width: 10.w),
+                              Expanded(
+                                child: Text(
+                                  _destinationAddress,
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 13.sp,
+                                    fontWeight: FontWeight.w500,
+                                    color: AppColors.textPrimary,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              GestureDetector(
+                                onTap: () {
+                                  setState(() {
+                                    _destinationLocation = null;
+                                    _destinationAddress = '';
+                                    _priceEstimate = null;
+                                    _polylines.clear();
+                                    _markers.removeWhere((m) =>
+                                        m.markerId.value == 'pickup' ||
+                                        m.markerId.value == 'destination');
+                                  });
+                                  _ctaAnimController.reverse();
+                                },
+                                child: Icon(Icons.close_rounded, color: AppColors.textHint, size: 18.sp),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    if (_destinationLocation != null) SizedBox(height: 14.h),
+
+                    // Price estimate display
+                    if (_priceEstimate != null)
+                      Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 20.w),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: _InfoChip(
+                                icon: Icons.payments_rounded,
+                                label: '${_priceEstimate!['estimated_price']} CDF',
+                                color: AppColors.primary,
+                              ),
+                            ),
+                            SizedBox(width: 8.w),
+                            Expanded(
+                              child: _InfoChip(
+                                icon: Icons.route_rounded,
+                                label: '${_priceEstimate!['distance_km']} km',
+                                color: AppColors.info,
+                              ),
+                            ),
+                            SizedBox(width: 8.w),
+                            Expanded(
+                              child: _InfoChip(
+                                icon: Icons.schedule_rounded,
+                                label: '${(_priceEstimate!['estimated_duration_minutes'] as num).toInt()} min',
+                                color: AppColors.success,
+                              ),
                             ),
                           ],
                         ),
-                        child: Material(
-                          color: Colors.transparent,
-                          child: InkWell(
-                            onTap: _showDestinationSearch,
-                            borderRadius: BorderRadius.circular(18.r),
-                            child: Padding(
-                              padding: EdgeInsets.symmetric(
-                                vertical: 16.h,
-                                horizontal: 8.w,
+                      ),
+                    if (_priceEstimate != null) SizedBox(height: 14.h),
+
+                    // CTA button – only visible when destination is chosen
+                    if (_destinationLocation != null)
+                      AnimatedBuilder(
+                        animation: _ctaScaleAnim,
+                        builder: (context, child) {
+                          return Transform.scale(
+                            scale: _ctaScaleAnim.value,
+                            child: child,
+                          );
+                        },
+                        child: Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 20.w),
+                          child: Container(
+                            width: double.infinity,
+                            decoration: BoxDecoration(
+                              gradient: const LinearGradient(
+                                colors: AppColors.ctaGradient,
+                                begin: Alignment.centerLeft,
+                                end: Alignment.centerRight,
                               ),
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(
-                                    Icons.local_taxi_rounded,
-                                    size: 22.sp,
-                                    color: Colors.white,
+                              borderRadius: BorderRadius.circular(18.r),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: AppColors.primaryDark.withOpacity(0.35),
+                                  blurRadius: 18,
+                                  offset: const Offset(0, 6),
+                                ),
+                              ],
+                            ),
+                            child: Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                onTap: () {
+                                  if (_priceEstimate != null) {
+                                    _showRideRequestSheet();
+                                  } else {
+                                    _estimatePrice();
+                                  }
+                                },
+                                borderRadius: BorderRadius.circular(18.r),
+                                child: Padding(
+                                  padding: EdgeInsets.symmetric(
+                                    vertical: 16.h,
+                                    horizontal: 8.w,
                                   ),
-                                  SizedBox(width: 10.w),
-                                  Text(
-                                    AppStrings.orderRide,
-                                    style: GoogleFonts.poppins(
-                                      fontSize: 16.sp,
-                                      fontWeight: FontWeight.w700,
-                                      letterSpacing: 0.2,
-                                      color: Colors.white,
-                                    ),
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Icon(
+                                        Icons.local_taxi_rounded,
+                                        size: 22.sp,
+                                        color: Colors.white,
+                                      ),
+                                      SizedBox(width: 10.w),
+                                      Text(
+                                        AppStrings.orderRide,
+                                        style: GoogleFonts.poppins(
+                                          fontSize: 16.sp,
+                                          fontWeight: FontWeight.w700,
+                                          letterSpacing: 0.2,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                      SizedBox(width: 8.w),
+                                      Icon(
+                                        Icons.arrow_forward_rounded,
+                                        size: 18.sp,
+                                        color: Colors.white.withOpacity(0.8),
+                                      ),
+                                    ],
                                   ),
-                                  SizedBox(width: 8.w),
-                                  Icon(
-                                    Icons.arrow_forward_rounded,
-                                    size: 18.sp,
-                                    color: Colors.white.withOpacity(0.8),
-                                  ),
-                                ],
+                                ),
                               ),
                             ),
                           ),
                         ),
                       ),
-                    ),
                     SizedBox(height: 16.h),
                   ],
                 ),
@@ -873,6 +1079,103 @@ class _VehicleCard extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _PaymentPill extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final bool isActive;
+  final VoidCallback onTap;
+
+  const _PaymentPill({
+    required this.label,
+    required this.icon,
+    required this.isActive,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: EdgeInsets.symmetric(vertical: 10.h),
+          decoration: BoxDecoration(
+            color: isActive ? AppColors.primary.withOpacity(0.1) : AppColors.surfaceVariant,
+            borderRadius: BorderRadius.circular(12.r),
+            border: Border.all(
+              color: isActive ? AppColors.primary : Colors.transparent,
+              width: 1.5,
+            ),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                icon,
+                size: 16.sp,
+                color: isActive ? AppColors.primary : AppColors.textSecondary,
+              ),
+              SizedBox(height: 4.h),
+              Text(
+                label,
+                style: GoogleFonts.poppins(
+                  fontSize: 10.sp,
+                  fontWeight: FontWeight.w600,
+                  color: isActive ? AppColors.primary : AppColors.textSecondary,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _InfoChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+
+  const _InfoChip({
+    required this.icon,
+    required this.label,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 10.h),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(12.r),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14.sp, color: color),
+          SizedBox(width: 6.w),
+          Flexible(
+            child: Text(
+              label,
+              style: GoogleFonts.poppins(
+                fontSize: 12.sp,
+                fontWeight: FontWeight.w700,
+                color: color,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
       ),
     );
   }

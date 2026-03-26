@@ -25,6 +25,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _vehicleModelCtrl = TextEditingController();
   final _vehicleColorCtrl = TextEditingController();
   final _licensePlateCtrl = TextEditingController();
+  String _selectedCategory = 'economy';
 
   @override
   void dispose() {
@@ -234,6 +235,19 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         decoration: _fieldDeco('Plaque d\'immatriculation', Icons.credit_card),
                         validator: (v) => (v == null || v.isEmpty) ? 'Requis' : null,
                       ),
+                      SizedBox(height: 12.h),
+                      DropdownButtonFormField<String>(
+                        value: _selectedCategory,
+                        decoration: _fieldDeco('Cat\u00e9gorie du v\u00e9hicule', Icons.category),
+                        dropdownColor: AppColors.darkLight,
+                        style: const TextStyle(color: Colors.white),
+                        items: const [
+                          DropdownMenuItem(value: 'economy', child: Text('\u00c9conomie')),
+                          DropdownMenuItem(value: 'comfort', child: Text('Confort')),
+                          DropdownMenuItem(value: 'van', child: Text('Van')),
+                        ],
+                        onChanged: (v) => setState(() => _selectedCategory = v ?? 'economy'),
+                      ),
 
                       SizedBox(height: 32.h),
 
@@ -255,6 +269,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                             vehicleModel: _vehicleModelCtrl.text.trim(),
                                             vehicleColor: _vehicleColorCtrl.text.trim(),
                                             licensePlate: _licensePlateCtrl.text.trim(),
+                                            vehicleCategory: _selectedCategory,
                                           ));
                                     }
                                   },

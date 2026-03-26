@@ -2,8 +2,13 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
+import '../../../../core/constants/api_constants.dart';
+import '../../../../core/constants/app_strings.dart';
+import '../../../../core/di/injection.dart';
+import '../../../../core/network/api_client.dart';
 import '../../../../core/services/places_service.dart';
 import '../../../../core/theme/app_colors.dart';
 
@@ -19,8 +24,10 @@ class DestinationSearchSheet extends StatefulWidget {
 class _DestinationSearchSheetState extends State<DestinationSearchSheet> {
   final _searchController = TextEditingController();
   final _placesService = PlacesService();
+  final ApiClient _api = getIt<ApiClient>();
 
   List<PlacePrediction> _predictions = [];
+  List<Map<String, dynamic>> _recentRides = [];
   bool _isLoading = false;
   bool _apiError = false;
   Timer? _debounce;
@@ -53,6 +60,33 @@ class _DestinationSearchSheetState extends State<DestinationSearchSheet> {
     {'name': 'Centre Ville (Boulevard)', 'lat': -4.3200, 'lng': 15.3050},
     {'name': 'Marché de la Liberté',     'lat': -4.3410, 'lng': 15.3130},
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRecentRides();
+  }
+
+  Future<void> _loadRecentRides() async {
+    try {
+      final resp = await _api.dio.get(ApiConstants.passengerHistory);
+      final rides = (resp.data['results'] ?? resp.data) as List;
+      if (!mounted) return;
+      setState(() {
+        _recentRides = rides
+            .where((r) =>
+                r['destination_address'] != null &&
+                r['destination_latitude'] != null)
+            .take(5)
+            .map<Map<String, dynamic>>((r) => {
+                  'address': r['destination_address'],
+                  'lat': double.tryParse(r['destination_latitude'].toString()) ?? 0.0,
+                  'lng': double.tryParse(r['destination_longitude'].toString()) ?? 0.0,
+                })
+            .toList();
+      });
+    } catch (_) {}
+  }
 
   void _onSearch(String query) {
     _debounce?.cancel();
@@ -328,16 +362,61 @@ class _DestinationSearchSheetState extends State<DestinationSearchSheet> {
     );
   }
 
-  // ── Static popular places ──
+  // ── Static popular places + recent rides ──
   Widget _buildPopularPlaces() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    return ListView(
       children: [
+        // Recent rides section
+        if (_recentRides.isNotEmpty) ...[
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: 20.w),
+            child: Text(
+              AppStrings.recentRides,
+              style: GoogleFonts.poppins(
+                fontSize: 15.sp,
+                fontWeight: FontWeight.w700,
+                color: AppColors.textPrimary,
+              ),
+            ),
+          ),
+          SizedBox(height: 6.h),
+          ..._recentRides.map((ride) => ListTile(
+                contentPadding: EdgeInsets.symmetric(
+                    horizontal: 20.w, vertical: 2.h),
+                leading: Container(
+                  width: 44.w,
+                  height: 44.w,
+                  decoration: BoxDecoration(
+                    color: AppColors.success.withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(14.r),
+                  ),
+                  child: Icon(Icons.history_rounded,
+                      color: AppColors.success, size: 22.sp),
+                ),
+                title: Text(
+                  ride['address'] as String,
+                  style: GoogleFonts.poppins(
+                    fontSize: 14.sp,
+                    fontWeight: FontWeight.w500,
+                    color: AppColors.textPrimary,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                onTap: () => widget.onDestinationSelected(
+                  ride['address'] as String,
+                  LatLng(ride['lat'] as double, ride['lng'] as double),
+                ),
+              )),
+          SizedBox(height: 16.h),
+        ],
+
+        // Popular places header
         Padding(
           padding: EdgeInsets.symmetric(horizontal: 20.w),
           child: Text(
             'Lieux populaires',
-            style: TextStyle(
+            style: GoogleFonts.poppins(
               fontSize: 15.sp,
               fontWeight: FontWeight.w700,
               color: AppColors.textPrimary,
@@ -345,41 +424,33 @@ class _DestinationSearchSheetState extends State<DestinationSearchSheet> {
           ),
         ),
         SizedBox(height: 6.h),
-        Expanded(
-          child: ListView.builder(
-            itemCount: _popularPlaces.length,
-            itemBuilder: (context, index) {
-              final place = _popularPlaces[index];
-              return ListTile(
-                contentPadding: EdgeInsets.symmetric(
-                    horizontal: 20.w, vertical: 2.h),
-                leading: Container(
-                  width: 44.w,
-                  height: 44.w,
-                  decoration: BoxDecoration(
-                    color: AppColors.primary.withOpacity(0.12),
-                    borderRadius: BorderRadius.circular(14.r),
-                  ),
-                  child: Icon(Icons.location_on_rounded,
-                      color: AppColors.primaryDark, size: 22.sp),
+        ..._popularPlaces.map((place) => ListTile(
+              contentPadding: EdgeInsets.symmetric(
+                  horizontal: 20.w, vertical: 2.h),
+              leading: Container(
+                width: 44.w,
+                height: 44.w,
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(14.r),
                 ),
-                title: Text(
-                  place['name'] as String,
-                  style: TextStyle(
-                    fontSize: 15.sp,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textPrimary,
-                  ),
+                child: Icon(Icons.location_on_rounded,
+                    color: AppColors.primaryDark, size: 22.sp),
+              ),
+              title: Text(
+                place['name'] as String,
+                style: GoogleFonts.poppins(
+                  fontSize: 15.sp,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary,
                 ),
-                onTap: () => widget.onDestinationSelected(
-                  place['name'] as String,
-                  LatLng(
-                      place['lat'] as double, place['lng'] as double),
-                ),
-              );
-            },
-          ),
-        ),
+              ),
+              onTap: () => widget.onDestinationSelected(
+                place['name'] as String,
+                LatLng(
+                    place['lat'] as double, place['lng'] as double),
+              ),
+            )),
       ],
     );
   }

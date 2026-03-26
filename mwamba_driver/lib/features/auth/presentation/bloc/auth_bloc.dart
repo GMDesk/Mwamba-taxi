@@ -32,6 +32,7 @@ class RegisterEvent extends AuthEvent {
   final String? vehicleModel;
   final String? vehicleColor;
   final String? licensePlate;
+  final String? vehicleCategory;
   RegisterEvent({
     required this.phone,
     required this.firstName,
@@ -41,6 +42,7 @@ class RegisterEvent extends AuthEvent {
     this.vehicleModel,
     this.vehicleColor,
     this.licensePlate,
+    this.vehicleCategory,
   });
   @override
   List<Object?> get props => [phone, firstName, lastName, password];
@@ -145,6 +147,9 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
       }
       if (event.licensePlate != null && event.licensePlate!.isNotEmpty) {
         data['license_plate'] = event.licensePlate;
+      }
+      if (event.vehicleCategory != null && event.vehicleCategory!.isNotEmpty) {
+        data['vehicle_category'] = event.vehicleCategory;
       }
 
       final resp = await _api.dio.post(ApiConstants.registerDriver, data: data);

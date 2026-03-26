@@ -23,6 +23,7 @@ class ApiConstants {
 
   // Rides
   static String acceptRide(String id) => '/rides/$id/accept/';
+  static String declineRide(String id) => '/rides/$id/decline/';
   static String startRide(String id) => '/rides/$id/start/';
   static String completeRide(String id) => '/rides/$id/complete/';
   static String cancelRide(String id) => '/rides/$id/cancel/';
@@ -32,8 +33,11 @@ class ApiConstants {
   static const String driverHistory = '/rides/history/driver/';
   static const String pendingRides = '/rides/pending/';
 
-  // Payments
+  // Payments / Wallet
   static const String earnings = '/payments/earnings/';
+  static const String wallet = '/payments/wallet/';
+  static const String walletTransactions = '/payments/wallet/transactions/';
+  static const String payoutRequest = '/payments/payout/request/';
   static const String payouts = '/payments/payouts/';
 
   // Notifications

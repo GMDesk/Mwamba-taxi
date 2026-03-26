@@ -70,8 +70,141 @@ class _EarningsScreenState extends State<EarningsScreen> {
     }
   }
 
+  void _showWithdrawSheet() {
+    final amountCtrl = TextEditingController();
+    final phoneCtrl = TextEditingController();
+    bool sending = false;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) {
+          final walletBalance = (_earnings?['wallet_balance'] ?? 0).toDouble();
+          return Container(
+            padding: EdgeInsets.fromLTRB(
+                20.w, 12.h, 20.w, MediaQuery.of(ctx).viewInsets.bottom + 24.h),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(24.r)),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 40.w, height: 4.h,
+                    decoration: BoxDecoration(
+                      color: AppColors.border,
+                      borderRadius: BorderRadius.circular(2.r),
+                    ),
+                  ),
+                ),
+                SizedBox(height: 20.h),
+                Text('Retirer vers Mobile Money',
+                    style: TextStyle(fontSize: 18.sp, fontWeight: FontWeight.w700)),
+                SizedBox(height: 8.h),
+                Text(
+                  'Solde disponible: ${NumberFormat('#,###').format(walletBalance)} CDF',
+                  style: TextStyle(fontSize: 14.sp, color: AppColors.textSecondary),
+                ),
+                SizedBox(height: 20.h),
+                TextField(
+                  controller: amountCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: InputDecoration(
+                    labelText: 'Montant (CDF)',
+                    hintText: 'Min. 1 000 CDF',
+                    filled: true,
+                    fillColor: AppColors.inputFill,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14.r),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
+                ),
+                SizedBox(height: 12.h),
+                TextField(
+                  controller: phoneCtrl,
+                  keyboardType: TextInputType.phone,
+                  decoration: InputDecoration(
+                    labelText: 'Numéro Mobile Money',
+                    hintText: '+243 8XX XXX XXX',
+                    filled: true,
+                    fillColor: AppColors.inputFill,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14.r),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
+                ),
+                SizedBox(height: 20.h),
+                SizedBox(
+                  width: double.infinity,
+                  height: 52.h,
+                  child: ElevatedButton(
+                    onPressed: sending
+                        ? null
+                        : () async {
+                            final amount = int.tryParse(amountCtrl.text.trim()) ?? 0;
+                            if (amount < 1000) return;
+                            final phone = phoneCtrl.text.trim();
+                            if (phone.isEmpty) return;
+                            setSheetState(() => sending = true);
+                            try {
+                              await _api.dio.post(
+                                ApiConstants.payoutRequest,
+                                data: {'amount': amount, 'phone_number': phone},
+                              );
+                              if (ctx.mounted) Navigator.pop(ctx);
+                              _load();
+                              if (mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                      content: Text('Retrait initié — vérifiez votre téléphone')),
+                                );
+                              }
+                            } on DioException catch (e) {
+                              setSheetState(() => sending = false);
+                              if (ctx.mounted) {
+                                ScaffoldMessenger.of(ctx).showSnackBar(
+                                  SnackBar(
+                                      content: Text(e.response?.data?['detail'] ??
+                                          'Erreur lors du retrait')),
+                                );
+                              }
+                            }
+                          },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primary,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16.r)),
+                    ),
+                    child: sending
+                        ? SizedBox(
+                            width: 22.w, height: 22.w,
+                            child: const CircularProgressIndicator(
+                                color: Colors.white, strokeWidth: 2.5))
+                        : Text('Retirer',
+                            style: TextStyle(
+                                fontSize: 15.sp,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.white)),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final fmt = NumberFormat('#,###');
     return Scaffold(
       backgroundColor: AppColors.background,
       body: _loading
@@ -85,10 +218,7 @@ class _EarningsScreenState extends State<EarningsScreen> {
                       SizedBox(height: 12.h),
                       const Text('Erreur de chargement'),
                       SizedBox(height: 12.h),
-                      TextButton(
-                        onPressed: _load,
-                        child: const Text('R\u00e9essayer'),
-                      ),
+                      TextButton(onPressed: _load, child: const Text('Réessayer')),
                     ],
                   ),
                 )
@@ -97,7 +227,7 @@ class _EarningsScreenState extends State<EarningsScreen> {
                   color: AppColors.primary,
                   child: CustomScrollView(
                     slivers: [
-                      // Header
+                      // Header with earnings
                       SliverToBoxAdapter(
                         child: Container(
                           decoration: const BoxDecoration(
@@ -117,14 +247,11 @@ class _EarningsScreenState extends State<EarningsScreen> {
                               padding: EdgeInsets.fromLTRB(20.w, 12.h, 20.w, 28.h),
                               child: Column(
                                 children: [
-                                  Text(
-                                    'Mes Revenus',
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 18.sp,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
+                                  Text('Mes Revenus',
+                                      style: TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 18.sp,
+                                          fontWeight: FontWeight.w700)),
                                   SizedBox(height: 20.h),
                                   // Filter tabs
                                   Container(
@@ -133,55 +260,113 @@ class _EarningsScreenState extends State<EarningsScreen> {
                                       color: Colors.white.withOpacity(0.1),
                                       borderRadius: BorderRadius.circular(14.r),
                                     ),
-                                    child: Row(
-                                      children: [
-                                        _buildFilterTab(0, 'Jour'),
-                                        _buildFilterTab(1, 'Semaine'),
-                                        _buildFilterTab(2, 'Mois'),
-                                      ],
-                                    ),
+                                    child: Row(children: [
+                                      _buildFilterTab(0, 'Jour'),
+                                      _buildFilterTab(1, 'Semaine'),
+                                      _buildFilterTab(2, 'Mois'),
+                                    ]),
                                   ),
                                   SizedBox(height: 24.h),
-                                  // Amount
-                                  Text(
-                                    _filterLabel,
-                                    style: TextStyle(
-                                      color: Colors.white.withOpacity(0.6),
-                                      fontSize: 13.sp,
-                                    ),
-                                  ),
+                                  Text(_filterLabel,
+                                      style: TextStyle(
+                                          color: Colors.white.withOpacity(0.6),
+                                          fontSize: 13.sp)),
                                   SizedBox(height: 6.h),
                                   Row(
                                     mainAxisAlignment: MainAxisAlignment.center,
                                     crossAxisAlignment: CrossAxisAlignment.end,
                                     children: [
-                                      Text(
-                                        _currentAmount,
-                                        style: TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 40.sp,
-                                          fontWeight: FontWeight.w800,
-                                          height: 1,
-                                        ),
-                                      ),
+                                      Text(_currentAmount,
+                                          style: TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 40.sp,
+                                              fontWeight: FontWeight.w800,
+                                              height: 1)),
                                       Padding(
                                         padding: EdgeInsets.only(bottom: 4.h, left: 6.w),
-                                        child: Text(
-                                          'CDF',
-                                          style: TextStyle(
-                                            color: AppColors.primary,
-                                            fontSize: 16.sp,
-                                            fontWeight: FontWeight.w700,
-                                          ),
-                                        ),
+                                        child: Text('CDF',
+                                            style: TextStyle(
+                                                color: AppColors.primary,
+                                                fontSize: 16.sp,
+                                                fontWeight: FontWeight.w700)),
                                       ),
                                     ],
                                   ),
                                   SizedBox(height: 20.h),
-                                  // Mini bar chart
                                   _buildMiniChart(),
                                 ],
                               ),
+                            ),
+                          ),
+                        ),
+                      ),
+
+                      // Wallet balance card with withdraw button
+                      SliverPadding(
+                        padding: EdgeInsets.fromLTRB(20.w, 20.h, 20.w, 0),
+                        sliver: SliverToBoxAdapter(
+                          child: Container(
+                            padding: EdgeInsets.all(20.w),
+                            decoration: BoxDecoration(
+                              gradient: const LinearGradient(colors: AppColors.ctaGradient),
+                              borderRadius: BorderRadius.circular(20.r),
+                            ),
+                            child: Column(
+                              children: [
+                                Row(
+                                  children: [
+                                    Container(
+                                      padding: EdgeInsets.all(12.r),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white.withOpacity(0.2),
+                                        borderRadius: BorderRadius.circular(14.r),
+                                      ),
+                                      child: Icon(Icons.account_balance_wallet_rounded,
+                                          color: Colors.white, size: 24.sp),
+                                    ),
+                                    SizedBox(width: 16.w),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text('Portefeuille',
+                                              style: TextStyle(
+                                                  color: Colors.white.withOpacity(0.8),
+                                                  fontSize: 13.sp)),
+                                          SizedBox(height: 4.h),
+                                          Text(
+                                            '${fmt.format(_earnings!['wallet_balance'] ?? 0)} CDF',
+                                            style: TextStyle(
+                                                color: Colors.white,
+                                                fontSize: 24.sp,
+                                                fontWeight: FontWeight.w800),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                SizedBox(height: 16.h),
+                                SizedBox(
+                                  width: double.infinity,
+                                  height: 44.h,
+                                  child: ElevatedButton.icon(
+                                    onPressed: _showWithdrawSheet,
+                                    icon: Icon(Icons.arrow_upward_rounded,
+                                        color: AppColors.primary, size: 18.sp),
+                                    label: Text('Retirer vers Mobile Money',
+                                        style: TextStyle(
+                                            fontSize: 14.sp,
+                                            fontWeight: FontWeight.w700,
+                                            color: AppColors.primary)),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: Colors.white,
+                                      shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(12.r)),
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                         ),
@@ -191,100 +376,40 @@ class _EarningsScreenState extends State<EarningsScreen> {
                       SliverPadding(
                         padding: EdgeInsets.fromLTRB(20.w, 20.h, 20.w, 0),
                         sliver: SliverToBoxAdapter(
-                          child: Row(
-                            children: [
-                              _buildStatTile(
+                          child: Row(children: [
+                            _buildStatTile(
                                 icon: Icons.local_taxi_rounded,
                                 value: '${_earnings!['total_rides'] ?? 0}',
                                 label: 'Courses totales',
-                                color: AppColors.info,
-                              ),
-                              SizedBox(width: 12.w),
-                              _buildStatTile(
+                                color: AppColors.info),
+                            SizedBox(width: 12.w),
+                            _buildStatTile(
                                 icon: Icons.star_rounded,
                                 value: '${(_earnings!['avg_rating'] ?? 0).toStringAsFixed(1)}',
                                 label: 'Note moyenne',
-                                color: AppColors.starFilled,
-                              ),
-                            ],
-                          ),
+                                color: AppColors.starFilled),
+                          ]),
                         ),
                       ),
                       SliverPadding(
                         padding: EdgeInsets.fromLTRB(20.w, 12.h, 20.w, 0),
                         sliver: SliverToBoxAdapter(
-                          child: Row(
-                            children: [
-                              _buildStatTile(
+                          child: Row(children: [
+                            _buildStatTile(
                                 icon: Icons.check_circle_rounded,
-                                value: '${_earnings!['acceptance_rate'] ?? '\u2014'}%',
+                                value: '${_earnings!['acceptance_rate'] ?? '—'}%',
                                 label: 'Taux acceptation',
-                                color: AppColors.success,
-                              ),
-                              SizedBox(width: 12.w),
-                              _buildStatTile(
+                                color: AppColors.success),
+                            SizedBox(width: 12.w),
+                            _buildStatTile(
                                 icon: Icons.receipt_long_rounded,
-                                value: '${NumberFormat('#,###').format(_earnings!['total_commission'] ?? 0)}',
+                                value: '${fmt.format(_earnings!['total_commission'] ?? 0)}',
                                 label: 'Commission CDF',
-                                color: AppColors.primary,
-                              ),
-                            ],
-                          ),
+                                color: AppColors.primary),
+                          ]),
                         ),
                       ),
 
-                      // Total balance card
-                      SliverPadding(
-                        padding: EdgeInsets.fromLTRB(20.w, 20.h, 20.w, 0),
-                        sliver: SliverToBoxAdapter(
-                          child: Container(
-                            padding: EdgeInsets.all(20.w),
-                            decoration: BoxDecoration(
-                              gradient: const LinearGradient(
-                                colors: AppColors.ctaGradient,
-                              ),
-                              borderRadius: BorderRadius.circular(20.r),
-                            ),
-                            child: Row(
-                              children: [
-                                Container(
-                                  padding: EdgeInsets.all(12.r),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withOpacity(0.2),
-                                    borderRadius: BorderRadius.circular(14.r),
-                                  ),
-                                  child: Icon(Icons.account_balance_wallet_rounded,
-                                      color: Colors.white, size: 24.sp),
-                                ),
-                                SizedBox(width: 16.w),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        'Solde total',
-                                        style: TextStyle(
-                                          color: Colors.white.withOpacity(0.8),
-                                          fontSize: 13.sp,
-                                        ),
-                                      ),
-                                      SizedBox(height: 4.h),
-                                      Text(
-                                        '${NumberFormat('#,###').format(_earnings!['total_balance'] ?? 0)} CDF',
-                                        style: TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 24.sp,
-                                          fontWeight: FontWeight.w800,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
                       SliverToBoxAdapter(child: SizedBox(height: 100.h)),
                     ],
                   ),
@@ -305,14 +430,11 @@ class _EarningsScreenState extends State<EarningsScreen> {
             borderRadius: BorderRadius.circular(10.r),
           ),
           child: Center(
-            child: Text(
-              label,
-              style: TextStyle(
-                color: isActive ? Colors.white : Colors.white.withOpacity(0.6),
-                fontSize: 13.sp,
-                fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
-              ),
-            ),
+            child: Text(label,
+                style: TextStyle(
+                    color: isActive ? Colors.white : Colors.white.withOpacity(0.6),
+                    fontSize: 13.sp,
+                    fontWeight: isActive ? FontWeight.w700 : FontWeight.w500)),
           ),
         ),
       ),
@@ -345,23 +467,16 @@ class _EarningsScreenState extends State<EarningsScreen> {
                   width: 32.w,
                   height: (ratio * 50.h).clamp(8.h, 50.h),
                   decoration: BoxDecoration(
-                    color: isSelected
-                        ? AppColors.primary
-                        : Colors.white.withOpacity(0.2),
+                    color: isSelected ? AppColors.primary : Colors.white.withOpacity(0.2),
                     borderRadius: BorderRadius.circular(6.r),
                   ),
                 ),
                 SizedBox(height: 6.h),
-                Text(
-                  labels[i],
-                  style: TextStyle(
-                    color: isSelected
-                        ? AppColors.primary
-                        : Colors.white.withOpacity(0.4),
-                    fontSize: 10.sp,
-                    fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-                  ),
-                ),
+                Text(labels[i],
+                    style: TextStyle(
+                        color: isSelected ? AppColors.primary : Colors.white.withOpacity(0.4),
+                        fontSize: 10.sp,
+                        fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500)),
               ],
             ),
           );
@@ -402,22 +517,14 @@ class _EarningsScreenState extends State<EarningsScreen> {
               child: Icon(icon, color: color, size: 18.sp),
             ),
             SizedBox(height: 10.h),
-            Text(
-              value,
-              style: TextStyle(
-                fontSize: 18.sp,
-                fontWeight: FontWeight.w800,
-                color: AppColors.textPrimary,
-              ),
-            ),
+            Text(value,
+                style: TextStyle(
+                    fontSize: 18.sp,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.textPrimary)),
             SizedBox(height: 2.h),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 11.sp,
-                color: AppColors.textSecondary,
-              ),
-            ),
+            Text(label,
+                style: TextStyle(fontSize: 11.sp, color: AppColors.textSecondary)),
           ],
         ),
       ),

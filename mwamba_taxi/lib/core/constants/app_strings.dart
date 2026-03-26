@@ -73,17 +73,37 @@ class AppStrings {
   static const String scheduleRide = 'Planifier';
 
   // Vehicle Types
-  static const String vehicleEconomy = 'Économie';
-  static const String vehicleEconomyDesc = 'Abordable, fiable';
+  static const String vehicleStandard = 'Standard';
+  static const String vehicleStandardDesc = 'Abordable, fiable';
   static const String vehicleComfort = 'Confort';
   static const String vehicleComfortDesc = 'Plus d\'espace, climatisé';
-  static const String vehicleVan = 'Van';
-  static const String vehicleVanDesc = 'Idéal pour groupes';
+  static const String vehicleMoto = 'Moto';
+  static const String vehicleMotoDesc = 'Rapide, économique';
+  static const String vehicleGroup = 'Groupe';
+  static const String vehicleGroupDesc = 'Idéal pour groupes';
 
   // Home
-  static const String orderRide = 'Commander une course';
+  static const String orderRide = 'Commander un taxi';
   static const String hello = 'Bonjour';
   static const String recentPlaces = 'Lieux récents';
   static const String noPaymentMethod = 'Aucun moyen de paiement';
   static const String addPaymentMethod = 'Ajouter un moyen de paiement';
+  static const String chooseDestination = 'Choisissez votre destination';
+  static const String chooseOnMap = 'Choisir sur la carte';
+  static const String recentRides = 'Courses récentes';
+
+  // Ride flow
+  static const String driverArrived = 'Votre chauffeur est arrivé !';
+  static const String estimatedArrival = 'Arrivée estimée';
+  static const String rideFinished = 'Course terminée !';
+  static const String totalAmount = 'Montant total';
+  static const String payNow = 'Payer maintenant';
+  static const String rateYourRide = 'Notez votre course';
+  static const String reorder = 'Recommander';
+
+  // Payment methods
+  static const String paymentMethod = 'Moyen de paiement';
+  static const String airtelMoney = 'Airtel Money';
+  static const String orangeMoney = 'Orange Money';
+  static const String mpesa = 'M-Pesa';
 }

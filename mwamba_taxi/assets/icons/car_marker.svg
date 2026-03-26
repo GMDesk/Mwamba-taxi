@@ -1,0 +1,135 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 140" width="140" height="140">
+  <defs>
+    <linearGradient id="bodyGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#F59E0B"/>
+      <stop offset="50%" stop-color="#D97706"/>
+      <stop offset="100%" stop-color="#B45309"/>
+    </linearGradient>
+    <linearGradient id="glassGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#DBEAFE"/>
+      <stop offset="100%" stop-color="#93C5FD"/>
+    </linearGradient>
+    <linearGradient id="wheelGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#334155"/>
+      <stop offset="100%" stop-color="#1E293B"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="2.5"/>
+      <feOffset dy="2"/>
+      <feComposite in2="SourceAlpha" operator="arithmetic" k2="-1" k3="1"/>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <radialGradient id="rimGrad" cx="50%" cy="40%" r="50%">
+      <stop offset="0%" stop-color="#CBD5E1"/>
+      <stop offset="100%" stop-color="#475569"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Ground shadow -->
+  <ellipse cx="70" cy="108" rx="48" ry="6" fill="black" opacity="0.08"/>
+
+  <g filter="url(#shadow)">
+    <!-- Car body main shell -->
+    <path d="M16,72 L16,80 Q16,90 26,90 L114,90 Q124,90 124,80 L124,72 Q124,64 114,64 L26,64 Q16,64 16,72 Z" fill="url(#bodyGrad)"/>
+
+    <!-- Cabin / roof profile -->
+    <path d="M38,64 L48,40 Q50,36 56,36 L84,36 Q90,36 92,40 L102,64" fill="url(#bodyGrad)" stroke="#92400E" stroke-width="0.8"/>
+
+    <!-- Windshield front -->
+    <path d="M40,63 L49,42 Q50,39 54,39 L65,39 L65,63 Z" fill="url(#glassGrad)" opacity="0.88"/>
+    <!-- Windshield rear -->
+    <path d="M75,39 L86,39 Q90,39 91,42 L100,63 L75,63 Z" fill="url(#glassGrad)" opacity="0.82"/>
+    <!-- Center pillar -->
+    <rect x="65" y="36" width="10" height="28" fill="#B45309" opacity="0.7"/>
+    <!-- Window trim -->
+    <path d="M40,63 L49,42 Q50,39 54,39 L65,39 L65,63" fill="none" stroke="#92400E" stroke-width="1"/>
+    <path d="M75,39 L86,39 Q90,39 91,42 L100,63" fill="none" stroke="#92400E" stroke-width="1"/>
+
+    <!-- Roof line -->
+    <line x1="48" y1="36" x2="92" y2="36" stroke="#92400E" stroke-width="1.2"/>
+    <!-- Roof highlight -->
+    <path d="M52,37 L88,37" stroke="#FDE68A" stroke-width="0.8" opacity="0.5"/>
+
+    <!-- Glass reflection lines -->
+    <line x1="50" y1="45" x2="56" y2="55" stroke="white" stroke-width="0.6" opacity="0.35"/>
+    <line x1="88" y1="45" x2="82" y2="55" stroke="white" stroke-width="0.6" opacity="0.35"/>
+
+    <!-- Hood contour -->
+    <path d="M16,72 Q16,66 26,64 L38,64" fill="none" stroke="#92400E" stroke-width="0.7" opacity="0.5"/>
+    <!-- Trunk contour -->
+    <path d="M102,64 L114,64 Q124,66 124,72" fill="none" stroke="#92400E" stroke-width="0.7" opacity="0.5"/>
+
+    <!-- Headlights -->
+    <rect x="10" y="68" width="8" height="8" rx="3" fill="#FDE68A" opacity="0.95"/>
+    <rect x="11.5" y="69.5" width="5" height="5" rx="2" fill="white" opacity="0.5"/>
+    <!-- DRL strip -->
+    <line x1="11" y1="78" x2="17" y2="78" stroke="#FDE68A" stroke-width="1" stroke-linecap="round" opacity="0.6"/>
+
+    <!-- Taillights -->
+    <rect x="122" y="68" width="7" height="8" rx="2.5" fill="#EF4444" opacity="0.9"/>
+    <rect x="123" y="69.5" width="5" height="5" rx="1.5" fill="#FCA5A5" opacity="0.4"/>
+
+    <!-- Front bumper -->
+    <path d="M12,90 Q12,94 18,94 L34,94 Q38,94 38,90" fill="#78350F" opacity="0.7"/>
+    <!-- Grille -->
+    <rect x="14" y="90" width="22" height="3" rx="1" fill="#451A03"/>
+    <line x1="18" y1="90.5" x2="18" y2="92.5" stroke="#78350F" stroke-width="0.5"/>
+    <line x1="22" y1="90.5" x2="22" y2="92.5" stroke="#78350F" stroke-width="0.5"/>
+    <line x1="26" y1="90.5" x2="26" y2="92.5" stroke="#78350F" stroke-width="0.5"/>
+    <line x1="30" y1="90.5" x2="30" y2="92.5" stroke="#78350F" stroke-width="0.5"/>
+
+    <!-- Rear bumper -->
+    <path d="M102,90 Q102,94 108,94 L122,94 Q128,94 128,90" fill="#78350F" opacity="0.6"/>
+
+    <!-- Body crease line -->
+    <line x1="20" y1="77" x2="120" y2="77" stroke="#92400E" stroke-width="0.6" opacity="0.35"/>
+    <!-- Body highlight -->
+    <line x1="22" y1="67" x2="118" y2="67" stroke="#FDE68A" stroke-width="0.8" opacity="0.2"/>
+
+    <!-- Door handles -->
+    <rect x="56" y="72" width="6" height="1.5" rx="0.8" fill="#92400E" opacity="0.6"/>
+    <rect x="82" y="72" width="6" height="1.5" rx="0.8" fill="#92400E" opacity="0.6"/>
+
+    <!-- Door line -->
+    <line x1="68" y1="64" x2="68" y2="88" stroke="#92400E" stroke-width="0.5" opacity="0.3"/>
+
+    <!-- Side mirror -->
+    <ellipse cx="36" cy="60" rx="5" ry="3.5" fill="#D97706" stroke="#92400E" stroke-width="0.7"/>
+    <ellipse cx="36" cy="60" rx="3" ry="2" fill="#93C5FD" opacity="0.5"/>
+
+    <!-- Wheels -->
+    <!-- Front wheel -->
+    <circle cx="38" cy="96" r="12" fill="url(#wheelGrad)"/>
+    <circle cx="38" cy="96" r="8" fill="url(#rimGrad)"/>
+    <circle cx="38" cy="96" r="3" fill="#94A3B8"/>
+    <circle cx="38" cy="96" r="1.2" fill="#64748B"/>
+    <!-- 5-spoke pattern -->
+    <line x1="38" y1="88" x2="38" y2="92" stroke="#475569" stroke-width="1.2"/>
+    <line x1="31" y1="93" x2="34" y2="95" stroke="#475569" stroke-width="1.2"/>
+    <line x1="45" y1="93" x2="42" y2="95" stroke="#475569" stroke-width="1.2"/>
+    <line x1="32" y1="100" x2="35" y2="98" stroke="#475569" stroke-width="1.2"/>
+    <line x1="44" y1="100" x2="41" y2="98" stroke="#475569" stroke-width="1.2"/>
+    <!-- Wheel shine -->
+    <ellipse cx="35" cy="93" rx="2" ry="1.5" fill="white" opacity="0.15"/>
+
+    <!-- Rear wheel -->
+    <circle cx="102" cy="96" r="12" fill="url(#wheelGrad)"/>
+    <circle cx="102" cy="96" r="8" fill="url(#rimGrad)"/>
+    <circle cx="102" cy="96" r="3" fill="#94A3B8"/>
+    <circle cx="102" cy="96" r="1.2" fill="#64748B"/>
+    <line x1="102" y1="88" x2="102" y2="92" stroke="#475569" stroke-width="1.2"/>
+    <line x1="95" y1="93" x2="98" y2="95" stroke="#475569" stroke-width="1.2"/>
+    <line x1="109" y1="93" x2="106" y2="95" stroke="#475569" stroke-width="1.2"/>
+    <line x1="96" y1="100" x2="99" y2="98" stroke="#475569" stroke-width="1.2"/>
+    <line x1="108" y1="100" x2="105" y2="98" stroke="#475569" stroke-width="1.2"/>
+    <ellipse cx="99" cy="93" rx="2" ry="1.5" fill="white" opacity="0.15"/>
+
+    <!-- Fender arches -->
+    <path d="M24,90 Q38,82 52,90" fill="none" stroke="#92400E" stroke-width="0.8" opacity="0.3"/>
+    <path d="M88,90 Q102,82 116,90" fill="none" stroke="#92400E" stroke-width="0.8" opacity="0.3"/>
+
+    <!-- Taxi sign on roof -->
+    <rect x="60" y="28" width="20" height="8" rx="3.5" fill="#FDE68A" stroke="#B45309" stroke-width="0.8"/>
+    <text x="70" y="35" font-size="6" font-weight="bold" fill="#78350F" text-anchor="middle" font-family="Arial,sans-serif">TAXI</text>
+  </g>
+</svg>

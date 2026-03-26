@@ -13,6 +13,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import '../../../../core/constants/api_constants.dart';
 import '../../../../core/di/injection.dart';
 import '../../../../core/network/api_client.dart';
+import '../../../../core/services/driver_status_notifier.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/constants/app_strings.dart';
 import '../../../../core/widgets/app_alert.dart';
@@ -26,19 +27,43 @@ class DriverHomeScreen extends StatefulWidget {
 
 class _DriverHomeScreenState extends State<DriverHomeScreen> {
   final ApiClient _api = getIt<ApiClient>();
+  final DriverStatusNotifier _statusNotifier = getIt<DriverStatusNotifier>();
   GoogleMapController? _mapController;
   LatLng _currentPosition = const LatLng(-4.3250, 15.3222);
-  bool _isOnline = false;
+  bool get _isOnline => _statusNotifier.value;
   bool _toggling = false;
   StreamSubscription<Position>? _positionSub;
   WebSocketChannel? _ws;
 
   Map<String, dynamic>? _pendingRequest;
+  int _requestCountdown = 15;
+  int _requestTotalTimeout = 15;
+  Timer? _requestTimer;
 
   @override
   void initState() {
     super.initState();
+    _statusNotifier.addListener(_onStatusChanged);
     _initLocation();
+    _loadInitialStatus();
+  }
+
+  void _onStatusChanged() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _loadInitialStatus() async {
+    try {
+      final resp = await _api.dio.get(ApiConstants.driverProfile);
+      final online = resp.data?['is_online'] ?? false;
+      if (mounted && online != _isOnline) {
+        _statusNotifier.value = online;
+        if (_isOnline) {
+          _startLocationUpdates();
+          _connectWebSocket();
+        }
+      }
+    } catch (_) {}
   }
 
   Future<void> _initLocation() async {
@@ -63,9 +88,14 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         ApiConstants.updateStatus,
         data: {'is_online': goOnline},
       );
-      setState(() => _isOnline = goOnline);
+      _statusNotifier.value = goOnline;
 
       if (_isOnline) {
+        // Send current location immediately so backend has it
+        _api.dio.post(ApiConstants.updateLocation, data: {
+          'latitude': _currentPosition.latitude,
+          'longitude': _currentPosition.longitude,
+        }).ignore();
         _startLocationUpdates();
         _connectWebSocket();
       } else {
@@ -122,7 +152,17 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       (data) {
         final msg = jsonDecode(data);
         if (msg['type'] == 'ride_request') {
-          setState(() => _pendingRequest = msg['data']);
+          final rideData = msg['data'];
+          final timeout = rideData['timeout_seconds'] ?? 15;
+          setState(() {
+            _pendingRequest = rideData;
+            _requestCountdown = timeout is int ? timeout : 15;
+            _requestTotalTimeout = _requestCountdown;
+          });
+          _startRequestCountdown();
+        } else if (msg['type'] == 'ride_cancelled') {
+          _requestTimer?.cancel();
+          setState(() => _pendingRequest = null);
         }
       },
       onDone: () {
@@ -139,6 +179,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   }
 
   Future<void> _acceptRide(String rideId) async {
+    _requestTimer?.cancel();
     try {
       await _api.dio.post(ApiConstants.acceptRide(rideId));
       setState(() => _pendingRequest = null);
@@ -161,14 +202,36 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     }
   }
 
-  void _declineRide() {
+  void _startRequestCountdown() {
+    _requestTimer?.cancel();
+    _requestTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) { timer.cancel(); return; }
+      if (_requestCountdown <= 1) {
+        timer.cancel();
+        _declineRide(); // auto-decline on timeout
+      } else {
+        setState(() => _requestCountdown--);
+      }
+    });
+  }
+
+  Future<void> _declineRide() async {
+    final rideId = _pendingRequest?['id'];
+    _requestTimer?.cancel();
     setState(() => _pendingRequest = null);
+    if (rideId != null) {
+      try {
+        await _api.dio.post(ApiConstants.declineRide(rideId));
+      } catch (_) {}
+    }
   }
 
   @override
   void dispose() {
+    _statusNotifier.removeListener(_onStatusChanged);
     _stopLocationUpdates();
     _disconnectWebSocket();
+    _requestTimer?.cancel();
     _mapController?.dispose();
     super.dispose();
   }
@@ -337,6 +400,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
 
   Widget _buildRideRequestOverlay() {
     final ride = _pendingRequest!;
+    final distPickup = ride['distance_to_pickup_km'];
+    final etaPickup = ride['eta_to_pickup_minutes'];
+    final progress = _requestTotalTimeout > 0
+        ? _requestCountdown / _requestTotalTimeout
+        : 0.0;
     return Positioned(
       bottom: 108.h,
       left: 16.w,
@@ -356,7 +424,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Header
+            // Header with fare + countdown
             Container(
               padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 14.h),
               decoration: BoxDecoration(
@@ -384,14 +452,14 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                         Text(
                           AppStrings.newRideRequest,
                           style: TextStyle(
-                            fontSize: 16.sp,
-                            fontWeight: FontWeight.w700,
-                            color: Colors.white,
+                            fontSize: 14.sp,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white.withOpacity(0.9),
                           ),
                         ),
-                        if (ride['estimated_fare'] != null)
+                        if (ride['estimated_price'] != null)
                           Text(
-                            '${ride['estimated_fare']} CDF',
+                            '${ride['estimated_price']} CDF',
                             style: TextStyle(
                               fontSize: 22.sp,
                               fontWeight: FontWeight.w900,
@@ -401,20 +469,81 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                       ],
                     ),
                   ),
-                  if (ride['distance_km'] != null)
-                    Container(
-                      padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 6.h),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(10.r),
-                      ),
-                      child: Text(
-                        '${ride['distance_km']} km',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 12.sp,
-                          fontWeight: FontWeight.w700,
+                  // Countdown badge
+                  Container(
+                    width: 48.w,
+                    height: 48.w,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.white.withOpacity(0.2),
+                    ),
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        SizedBox(
+                          width: 42.w,
+                          height: 42.w,
+                          child: CircularProgressIndicator(
+                            value: progress.toDouble().clamp(0.0, 1.0),
+                            strokeWidth: 3,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              progress > 0.3 ? Colors.white : Colors.red.shade300,
+                            ),
+                            backgroundColor: Colors.white.withOpacity(0.2),
+                          ),
                         ),
+                        Text(
+                          '$_requestCountdown',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 16.sp,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // Quick info badges (distance + ETA + passenger)
+            Padding(
+              padding: EdgeInsets.fromLTRB(20.w, 12.h, 20.w, 0),
+              child: Row(
+                children: [
+                  if (distPickup != null)
+                    _buildInfoBadge(
+                      Icons.near_me_rounded,
+                      '$distPickup km',
+                      AppColors.primary,
+                    ),
+                  if (distPickup != null) SizedBox(width: 8.w),
+                  if (etaPickup != null)
+                    _buildInfoBadge(
+                      Icons.schedule_rounded,
+                      '~${etaPickup is num ? etaPickup.toStringAsFixed(0) : etaPickup} min',
+                      AppColors.info,
+                    ),
+                  const Spacer(),
+                  if (ride['passenger_name'] != null)
+                    Flexible(
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.person_outline, size: 14.sp, color: AppColors.textSecondary),
+                          SizedBox(width: 4.w),
+                          Flexible(
+                            child: Text(
+                              ride['passenger_name'],
+                              style: TextStyle(
+                                fontSize: 12.sp,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.textSecondary,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                 ],
@@ -422,7 +551,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             ),
             // Route
             Padding(
-              padding: EdgeInsets.fromLTRB(20.w, 14.h, 20.w, 16.h),
+              padding: EdgeInsets.fromLTRB(20.w, 10.h, 20.w, 16.h),
               child: Column(
                 children: [
                   _buildRouteRow(
@@ -447,7 +576,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
                     iconSize: 16,
                     color: AppColors.error,
                     label: 'Destination',
-                    address: ride['dropoff_address'] ?? 'Destination',
+                    address: ride['destination_address'] ?? 'Destination',
                   ),
                   SizedBox(height: 16.h),
                   // Actions
@@ -510,6 +639,32 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildInfoBadge(IconData icon, String text, Color color) {
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 5.h),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(10.r),
+        border: Border.all(color: color.withOpacity(0.15)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14.sp, color: color),
+          SizedBox(width: 4.w),
+          Text(
+            text,
+            style: TextStyle(
+              fontSize: 12.sp,
+              fontWeight: FontWeight.w700,
+              color: color,
+            ),
+          ),
+        ],
       ),
     );
   }

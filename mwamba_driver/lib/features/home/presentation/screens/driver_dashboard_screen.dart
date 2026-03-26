@@ -14,6 +14,7 @@ import '../../../../core/constants/api_constants.dart';
 import '../../../../core/constants/app_strings.dart';
 import '../../../../core/di/injection.dart';
 import '../../../../core/network/api_client.dart';
+import '../../../../core/services/driver_status_notifier.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/widgets/app_alert.dart';
 
@@ -27,7 +28,8 @@ class DriverDashboardScreen extends StatefulWidget {
 class _DriverDashboardScreenState extends State<DriverDashboardScreen>
     with SingleTickerProviderStateMixin {
   final ApiClient _api = getIt<ApiClient>();
-  bool _isOnline = false;
+  final DriverStatusNotifier _statusNotifier = getIt<DriverStatusNotifier>();
+  bool get _isOnline => _statusNotifier.value;
   bool _toggling = false;
   WebSocketChannel? _ws;
   Map<String, dynamic>? _pendingRequest;
@@ -50,6 +52,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen>
   @override
   void initState() {
     super.initState();
+    _statusNotifier.addListener(_onStatusChanged);
     _pulseController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 2),
@@ -58,8 +61,13 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen>
     _initLocation();
   }
 
+  void _onStatusChanged() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void dispose() {
+    _statusNotifier.removeListener(_onStatusChanged);
     _pulseController.dispose();
     _positionSub?.cancel();
     _disconnectWebSocket();
@@ -124,7 +132,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen>
               5.0;
           _todayRides = driverProfile?['total_rides'] ?? 0;
           _accountStatus = driverProfile?['status'] ?? 'pending';
-          _isOnline = driverProfile?['is_online'] ?? false;
+          _statusNotifier.value = driverProfile?['is_online'] ?? false;
           if (earnings != null) {
             _todayEarnings =
                 earnings['today']?.toString() ?? earnings['total']?.toString() ?? '0';
@@ -157,9 +165,14 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen>
         ApiConstants.updateStatus,
         data: {'is_online': goOnline},
       );
-      setState(() => _isOnline = goOnline);
+      _statusNotifier.value = goOnline;
 
       if (_isOnline) {
+        // Send current location immediately so backend has it
+        _api.dio.post(ApiConstants.updateLocation, data: {
+          'latitude': _currentPosition.latitude,
+          'longitude': _currentPosition.longitude,
+        }).ignore();
         _connectWebSocket();
         _startLocationUpdates();
       } else {
