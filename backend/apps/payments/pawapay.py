@@ -34,9 +34,9 @@ def _correspondent(phone: str) -> str:
         suffix = clean[3:5]
         if suffix in ("81", "82", "83"):
             return "VODACOM_CD"        # M-Pesa
-        if suffix in ("84", "85", "86", "89"):
+        if suffix in ("97", "99", "98"):
             return "AIRTEL_CD"          # Airtel Money
-        if suffix in ("90", "80"):
+        if suffix in ("80", "84", "85", "89"):
             return "ORANGE_CD"          # Orange Money
     return "VODACOM_CD"  # default fallback
 
