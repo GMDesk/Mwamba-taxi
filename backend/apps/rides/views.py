@@ -11,6 +11,13 @@ from rest_framework.views import APIView
 
 from apps.accounts.models import DriverProfile
 from apps.accounts.permissions import IsApprovedDriver, IsDriver, IsPassenger
+from apps.payments.models import Payment
+from apps.payments.wallet import (
+    get_or_create_wallet,
+    hold_funds,
+    process_ride_payment,
+    release_hold,
+)
 from apps.promotions.models import PromoCode, PromoUsage
 
 from .models import Ride, RideLocationLog, SOSAlert
@@ -48,6 +55,14 @@ class EstimatePriceView(APIView):
             float(d["destination_latitude"]),
             float(d["destination_longitude"]),
         )
+
+        # Include wallet balance if authenticated
+        if request.user.is_authenticated:
+            wallet = get_or_create_wallet(request.user)
+            result["wallet_balance"] = float(wallet.balance)
+            result["wallet_sufficient"] = wallet.can_afford(
+                __import__("decimal").Decimal(str(result["estimated_price"]))
+            )
 
         # Apply promo if any
         if d.get("promo_code"):
@@ -96,12 +111,36 @@ class RequestRideView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Payment method (wallet or cash)
+        payment_method = request.data.get("payment_method", "wallet")
+
         ride = serializer.save(passenger=request.user)
+
+        # Pre-authorize wallet if paying by wallet
+        if payment_method == "wallet":
+            from decimal import Decimal
+            wallet = get_or_create_wallet(request.user)
+            estimated = Decimal(str(ride.estimated_price))
+            if wallet.can_afford(estimated):
+                hold_funds(wallet, estimated, ride=ride)
+            else:
+                # Not enough balance — still allow ride (fallback to cash)
+                payment_method = "cash"
+
+        # Create payment record
+        Payment.objects.create(
+            ride=ride,
+            payer=request.user,
+            amount=ride.estimated_price,
+            method=payment_method,
+        )
 
         # Auto-assign the nearest available driver
         _auto_assign_nearest_driver(ride)
 
-        return Response(RideSerializer(ride).data, status=status.HTTP_201_CREATED)
+        data = RideSerializer(ride).data
+        data["payment_method"] = payment_method
+        return Response(data, status=status.HTTP_201_CREATED)
 
 
 class AcceptRideView(APIView):
@@ -288,7 +327,43 @@ class CompleteRideView(APIView):
         ride.status = Ride.Status.COMPLETED
         ride.completed_at = timezone.now()
         ride.final_price = ride.final_price or ride.estimated_price
-        ride.calculate_commission()
+
+        # Process payment based on method
+        payment_info = {}
+        try:
+            payment = Payment.objects.get(ride=ride)
+        except Payment.DoesNotExist:
+            payment = None
+
+        if payment and payment.method == Payment.Method.WALLET:
+            try:
+                payment_info = process_ride_payment(ride)
+                payment.status = Payment.Status.COMPLETED
+                payment.completed_at = timezone.now()
+                payment.save(update_fields=["status", "completed_at", "updated_at"])
+            except Exception as e:
+                logger.error("Wallet payment failed for ride %s: %s", ride.id, e)
+                # Fallback: calculate commission normally, mark payment failed
+                ride.calculate_commission()
+                ride.save(update_fields=["commission_amount", "driver_earnings"])
+                if payment:
+                    payment.status = Payment.Status.FAILED
+                    payment.save(update_fields=["status", "updated_at"])
+                payment_info = {"method": "cash", "error": str(e)}
+        else:
+            # Cash payment — just calculate commission
+            ride.calculate_commission()
+            if payment:
+                payment.status = Payment.Status.COMPLETED
+                payment.completed_at = timezone.now()
+                payment.save(update_fields=["status", "completed_at", "updated_at"])
+            payment_info = {
+                "method": "cash",
+                "total_price": float(ride.final_price),
+                "commission": float(ride.commission_amount),
+                "driver_share": float(ride.driver_earnings),
+            }
+
         ride.save()
 
         # Update driver profile
@@ -302,7 +377,7 @@ class CompleteRideView(APIView):
             ride.passenger,
             "Course terminée",
             f"Montant : {ride.final_price} CDF",
-            {"ride_id": str(ride.id), "type": "ride_completed"},
+            {"ride_id": str(ride.id), "type": "ride_completed", "payment": payment_info},
         )
 
         return Response(RideSerializer(ride).data)
@@ -343,6 +418,21 @@ class CancelRideView(APIView):
         ride.cancellation_reason = serializer.validated_data.get("reason", "")
         ride.cancelled_at = timezone.now()
         ride.save(update_fields=["status", "cancellation_reason", "cancelled_at"])
+
+        # Release wallet hold if any
+        try:
+            passenger_wallet = get_or_create_wallet(ride.passenger)
+            if passenger_wallet.held_amount > 0:
+                release_hold(passenger_wallet, passenger_wallet.held_amount, ride=ride)
+            # Mark payment as refunded
+            try:
+                payment = Payment.objects.get(ride=ride)
+                payment.status = Payment.Status.FAILED
+                payment.save(update_fields=["status", "updated_at"])
+            except Payment.DoesNotExist:
+                pass
+        except Exception as e:
+            logger.error("Failed to release hold for ride %s: %s", ride.id, e)
 
         # Free up driver and update stats
         if ride.driver and hasattr(ride.driver, "driver_profile"):

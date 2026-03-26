@@ -14,7 +14,7 @@ env = environ.Env(
     DEBUG=(bool, False),
     ALLOWED_HOSTS=(list, ["localhost", "127.0.0.1", "192.168.62.127"]),
     CORS_ALLOWED_ORIGINS=(list, []),
-    COMMISSION_RATE=(int, 15),
+    COMMISSION_RATE=(int, 20),
 )
 
 env_file = BASE_DIR / ".env"
@@ -255,11 +255,10 @@ TWILIO_AUTH_TOKEN = env("TWILIO_AUTH_TOKEN", default="")
 TWILIO_PHONE_NUMBER = env("TWILIO_PHONE_NUMBER", default="")
 
 # ---------------------------------------------------------------------------
-# Maxicash Payment
+# PawaPay Payment
 # ---------------------------------------------------------------------------
-MAXICASH_MERCHANT_ID = env("MAXICASH_MERCHANT_ID", default="")
-MAXICASH_MERCHANT_SECRET = env("MAXICASH_MERCHANT_SECRET", default="")
-MAXICASH_API_URL = env("MAXICASH_API_URL", default="https://api.maxicashapp.com")
+PAWAPAY_API_TOKEN = env("PAWAPAY_API_TOKEN", default="")
+PAWAPAY_WEBHOOK_SECRET = env("PAWAPAY_WEBHOOK_SECRET", default="")
 
 # ---------------------------------------------------------------------------
 # Firebase
