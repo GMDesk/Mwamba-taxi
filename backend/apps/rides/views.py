@@ -539,6 +539,33 @@ class RideDetailView(generics.RetrieveAPIView):
         return Ride.objects.filter(Q(passenger=user) | Q(driver=user))
 
 
+class ActiveRideView(APIView):
+    """Return the passenger's active ride, if any."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        ride = (
+            Ride.objects.filter(
+                passenger=request.user,
+                status__in=[
+                    Ride.Status.REQUESTED,
+                    Ride.Status.ACCEPTED,
+                    Ride.Status.DRIVER_ARRIVING,
+                    Ride.Status.DRIVER_ARRIVED,
+                    Ride.Status.IN_PROGRESS,
+                ],
+            )
+            .order_by("-created_at")
+            .first()
+        )
+        if ride is None:
+            return Response({"active": False}, status=status.HTTP_200_OK)
+        data = RideSerializer(ride).data
+        data["active"] = True
+        return Response(data, status=status.HTTP_200_OK)
+
+
 class PassengerRideHistoryView(generics.ListAPIView):
     """Get ride history for the current passenger."""
 

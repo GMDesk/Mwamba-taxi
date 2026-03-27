@@ -25,6 +25,8 @@ urlpatterns = [
     # History
     path("history/passenger/", views.PassengerRideHistoryView.as_view(), name="passenger-history"),
     path("history/driver/", views.DriverRideHistoryView.as_view(), name="driver-history"),
+    # Active ride check
+    path("active/", views.ActiveRideView.as_view(), name="active-ride"),
     # Driver pending rides
     path("pending/", views.DriverPendingRidesView.as_view(), name="driver-pending"),
 ]
