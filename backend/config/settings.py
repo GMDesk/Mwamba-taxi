@@ -25,6 +25,11 @@ SECRET_KEY = env("SECRET_KEY")
 DEBUG = env("DEBUG")
 ALLOWED_HOSTS = env("ALLOWED_HOSTS")
 
+CSRF_TRUSTED_ORIGINS = [
+    "https://mwambataxi.com",
+    "https://www.mwambataxi.com",
+]
+
 # ---------------------------------------------------------------------------
 # Applications
 # ---------------------------------------------------------------------------
