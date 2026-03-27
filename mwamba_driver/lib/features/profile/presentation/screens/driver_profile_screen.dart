@@ -199,8 +199,8 @@ class _DriverProfileScreenState extends State<DriverProfileScreen> {
                               Container(width: 1, height: 40.h, color: AppColors.divider),
                               _StatItem(
                                 icon: Icons.star_rounded,
-                                value: (_driverProfile?['avg_rating'] != null && _driverProfile!['avg_rating'] > 0)
-                                    ? _driverProfile!['avg_rating'].toStringAsFixed(1)
+                                value: (_driverProfile?['avg_rating'] != null && (_driverProfile!['avg_rating'] is num ? _driverProfile!['avg_rating'] > 0 : (num.tryParse(_driverProfile!['avg_rating'].toString()) ?? 0) > 0))
+                                    ? (num.tryParse(_driverProfile!['avg_rating'].toString()) ?? 0).toStringAsFixed(1)
                                     : '\u2014',
                                 label: 'Note',
                                 color: AppColors.starFilled,

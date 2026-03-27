@@ -173,11 +173,16 @@ class _LoginScreenState extends State<LoginScreen> {
                           controller: _phoneController,
                           keyboardType: TextInputType.phone,
                           decoration: InputDecoration(
-                            hintText: AppStrings.phoneHint,
+                            hintText: '8XX XXX XXX',
                             prefixIcon: Container(
                               width: 48.w,
                               alignment: Alignment.center,
                               child: Text('🇨🇩', style: TextStyle(fontSize: 20.sp)),
+                            ),
+                            prefixText: '+243 ',
+                            prefixStyle: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.textPrimary,
                             ),
                           ),
                           validator: (value) {

@@ -26,7 +26,7 @@ class DriverDashboardScreen extends StatefulWidget {
 }
 
 class _DriverDashboardScreenState extends State<DriverDashboardScreen>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   final ApiClient _api = getIt<ApiClient>();
   final DriverStatusNotifier _statusNotifier = getIt<DriverStatusNotifier>();
   bool get _isOnline => _statusNotifier.value;
@@ -52,6 +52,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _statusNotifier.addListener(_onStatusChanged);
     _pulseController = AnimationController(
       vsync: this,
@@ -61,12 +62,20 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen>
     _initLocation();
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _loadDashboardData();
+    }
+  }
+
   void _onStatusChanged() {
     if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _statusNotifier.removeListener(_onStatusChanged);
     _pulseController.dispose();
     _positionSub?.cancel();
@@ -199,17 +208,28 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen>
   void _connectWebSocket() async {
     final token = await _api.getAccessToken();
     if (token == null) return;
+
+    try { _ws?.sink.close(); } catch (_) {}
+
     _ws = WebSocketChannel.connect(
       Uri.parse('${ApiConstants.wsBaseUrl}/driver/?token=$token'),
     );
     _ws!.stream.listen(
       (data) {
         final msg = jsonDecode(data);
+        if (msg['type'] == 'heartbeat_ack') return;
         if (msg['type'] == 'ride_request') {
           setState(() => _pendingRequest = msg['data']);
+        } else if (msg['type'] == 'ride_cancelled' || msg['type'] == 'ride_reassigned') {
+          setState(() => _pendingRequest = null);
         }
       },
       onDone: () {
+        if (_isOnline && mounted) {
+          Future.delayed(const Duration(seconds: 3), _connectWebSocket);
+        }
+      },
+      onError: (_) {
         if (_isOnline && mounted) {
           Future.delayed(const Duration(seconds: 3), _connectWebSocket);
         }
@@ -253,14 +273,18 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen>
             Column(
               children: [
                 _buildDarkHeader(),
-                if (_accountStatus != 'approved') _buildStatusBanner(),
+                if (!_loadingStats && _accountStatus != 'approved') _buildStatusBanner(),
                 Expanded(
                   child: GoogleMap(
                     initialCameraPosition: CameraPosition(
                       target: _currentPosition,
                       zoom: 15,
                     ),
-                    onMapCreated: (c) => _mapController = c,
+                    onMapCreated: (c) async {
+                      _mapController = c;
+                      final style = await rootBundle.loadString('assets/map_style_light.json');
+                      c.setMapStyle(style);
+                    },
                     myLocationEnabled: true,
                     myLocationButtonEnabled: false,
                     zoomControlsEnabled: false,
@@ -725,9 +749,9 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen>
                   style: TextStyle(fontSize: 14.sp, fontWeight: FontWeight.w700),
                 ),
               ),
-              if (ride['estimated_fare'] != null)
+              if (ride['estimated_price'] != null)
                 Text(
-                  '${ride['estimated_fare']} CDF',
+                  '${ride['estimated_price']} CDF',
                   style: TextStyle(
                     fontSize: 16.sp,
                     fontWeight: FontWeight.w800,
@@ -764,7 +788,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen>
             iconColor: AppColors.error,
             bgColor: AppColors.error.withOpacity(0.1),
             label: 'Destination',
-            address: ride['dropoff_address'] ?? 'Destination',
+            address: ride['destination_address'] ?? 'Destination',
           ),
           SizedBox(height: 14.h),
           Row(
@@ -878,9 +902,9 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen>
                                 color: Colors.white,
                               ),
                             ),
-                            if (ride['estimated_fare'] != null)
+                            if (ride['estimated_price'] != null)
                               Text(
-                                '${ride['estimated_fare']} CDF',
+                                '${ride['estimated_price']} CDF',
                                 style: TextStyle(
                                   fontSize: 24.sp,
                                   fontWeight: FontWeight.w900,
@@ -941,7 +965,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen>
                         iconColor: AppColors.error,
                         bgColor: AppColors.error.withOpacity(0.12),
                         label: 'Destination',
-                        address: ride['dropoff_address'] ?? 'Destination',
+                        address: ride['destination_address'] ?? 'Destination',
                       ),
                       SizedBox(height: 20.h),
                       Row(

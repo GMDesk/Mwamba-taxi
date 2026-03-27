@@ -144,6 +144,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     final token = await _api.getAccessToken();
     if (token == null) return;
 
+    try { _ws?.sink.close(); } catch (_) {}
+
     _ws = WebSocketChannel.connect(
       Uri.parse('${ApiConstants.wsBaseUrl}/driver/?token=$token'),
     );
@@ -151,6 +153,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     _ws!.stream.listen(
       (data) {
         final msg = jsonDecode(data);
+        if (msg['type'] == 'heartbeat_ack') return;
         if (msg['type'] == 'ride_request') {
           final rideData = msg['data'];
           final timeout = rideData['timeout_seconds'] ?? 15;
@@ -160,12 +163,17 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             _requestTotalTimeout = _requestCountdown;
           });
           _startRequestCountdown();
-        } else if (msg['type'] == 'ride_cancelled') {
+        } else if (msg['type'] == 'ride_cancelled' || msg['type'] == 'ride_reassigned') {
           _requestTimer?.cancel();
           setState(() => _pendingRequest = null);
         }
       },
       onDone: () {
+        if (_isOnline && mounted) {
+          Future.delayed(const Duration(seconds: 3), _connectWebSocket);
+        }
+      },
+      onError: (_) {
         if (_isOnline && mounted) {
           Future.delayed(const Duration(seconds: 3), _connectWebSocket);
         }

@@ -24,6 +24,8 @@ class ApiConstants {
   // Rides
   static String acceptRide(String id) => '/rides/$id/accept/';
   static String declineRide(String id) => '/rides/$id/decline/';
+  static String arrivedAtPickup(String id) => '/rides/$id/arrived/';
+  static String driverArriving(String id) => '/rides/$id/arriving/';
   static String startRide(String id) => '/rides/$id/start/';
   static String completeRide(String id) => '/rides/$id/complete/';
   static String cancelRide(String id) => '/rides/$id/cancel/';
@@ -49,4 +51,7 @@ class ApiConstants {
 
   // Reviews
   static String driverReviews(String driverId) => '/reviews/driver/$driverId/';
+
+  // Google Maps
+  static const String googleMapsApiKey = 'REDACTED_GOOGLE_API_KEY';
 }

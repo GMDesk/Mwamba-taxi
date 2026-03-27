@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../constants/api_constants.dart';
@@ -10,12 +11,21 @@ class ApiClient {
   static const String _accessTokenKey = 'access_token';
   static const String _refreshTokenKey = 'refresh_token';
 
+  static const _publicPaths = [
+    ApiConstants.login,
+    ApiConstants.registerPassenger,
+    ApiConstants.requestOtp,
+    ApiConstants.verifyOtp,
+    ApiConstants.refreshToken,
+    ApiConstants.nearbyDrivers,
+  ];
+
   ApiClient() {
     _dio = Dio(
       BaseOptions(
         baseUrl: ApiConstants.baseUrl,
-        connectTimeout: const Duration(seconds: 30),
-        receiveTimeout: const Duration(seconds: 30),
+        connectTimeout: const Duration(seconds: 60),
+        receiveTimeout: const Duration(seconds: 60),
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
@@ -23,12 +33,46 @@ class ApiClient {
       ),
     );
 
-    _dio.interceptors.add(_AuthInterceptor(this));
-    _dio.interceptors.add(LogInterceptor(
-      requestBody: true,
-      responseBody: true,
-      logPrint: (obj) => print('[API] $obj'),
+    _dio.interceptors.add(InterceptorsWrapper(
+      onRequest: (options, handler) async {
+        if (_publicPaths.any((p) => options.path.contains(p))) {
+          return handler.next(options);
+        }
+        final token = await getAccessToken();
+        if (token != null) {
+          options.headers['Authorization'] = 'Bearer $token';
+        }
+        handler.next(options);
+      },
+      onError: (error, handler) async {
+        // Don't attempt token refresh for public endpoints (login, register, etc.)
+        if (_publicPaths.any((p) => error.requestOptions.path.contains(p))) {
+          return handler.next(error);
+        }
+        if (error.response?.statusCode == 401) {
+          final refreshed = await _tryRefreshToken();
+          if (refreshed) {
+            final token = await getAccessToken();
+            error.requestOptions.headers['Authorization'] = 'Bearer $token';
+            try {
+              final response = await _dio.fetch(error.requestOptions);
+              return handler.resolve(response);
+            } catch (e) {
+              return handler.next(error);
+            }
+          }
+        }
+        handler.next(error);
+      },
     ));
+
+    if (kDebugMode) {
+      _dio.interceptors.add(LogInterceptor(
+        requestBody: true,
+        responseBody: true,
+        error: true,
+      ));
+    }
   }
 
   Dio get dio => _dio;
@@ -53,68 +97,22 @@ class ApiClient {
     final token = await getAccessToken();
     return token != null && token.isNotEmpty;
   }
-}
 
-class _AuthInterceptor extends Interceptor {
-  final ApiClient _client;
-  bool _isRefreshing = false;
-
-  _AuthInterceptor(this._client);
-
-  @override
-  void onRequest(
-    RequestOptions options,
-    RequestInterceptorHandler handler,
-  ) async {
-    // Skip auth for public endpoints
-    final publicPaths = [
-      ApiConstants.login,
-      ApiConstants.registerPassenger,
-      ApiConstants.requestOtp,
-      ApiConstants.verifyOtp,
-      ApiConstants.refreshToken,
-      ApiConstants.nearbyDrivers,
-    ];
-    if (publicPaths.any((p) => options.path.contains(p))) {
-      return handler.next(options);
+  Future<bool> _tryRefreshToken() async {
+    try {
+      final refresh = await getRefreshToken();
+      if (refresh == null) return false;
+      final resp = await Dio(BaseOptions(baseUrl: ApiConstants.baseUrl)).post(
+        ApiConstants.refreshToken,
+        data: {'refresh': refresh},
+      );
+      final newAccess = resp.data['access'] as String;
+      final newRefresh = resp.data['refresh'] as String? ?? refresh;
+      await saveTokens(access: newAccess, refresh: newRefresh);
+      return true;
+    } catch (_) {
+      await clearTokens();
+      return false;
     }
-
-    final token = await _client.getAccessToken();
-    if (token != null) {
-      options.headers['Authorization'] = 'Bearer $token';
-    }
-    handler.next(options);
-  }
-
-  @override
-  void onError(DioException err, ErrorInterceptorHandler handler) async {
-    if (err.response?.statusCode == 401 && !_isRefreshing) {
-      _isRefreshing = true;
-      // Try refresh
-      final refreshToken = await _client.getRefreshToken();
-      if (refreshToken != null) {
-        try {
-          final response = await Dio().post(
-            '${ApiConstants.baseUrl}${ApiConstants.refreshToken}',
-            data: {'refresh': refreshToken},
-          );
-          final newAccess = response.data['access'] as String;
-          final newRefresh = response.data['refresh'] as String? ?? refreshToken;
-          await _client.saveTokens(access: newAccess, refresh: newRefresh);
-          _isRefreshing = false;
-
-          // Retry original request
-          err.requestOptions.headers['Authorization'] = 'Bearer $newAccess';
-          final retryResponse = await _client.dio.fetch(err.requestOptions);
-          return handler.resolve(retryResponse);
-        } catch (_) {
-          await _client.clearTokens();
-          _isRefreshing = false;
-        }
-      } else {
-        _isRefreshing = false;
-      }
-    }
-    handler.next(err);
   }
 }

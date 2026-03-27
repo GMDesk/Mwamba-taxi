@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
@@ -144,22 +145,22 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       _isRouteLoading = false;
       _polylines.clear();
       if (points.isNotEmpty) {
-        // White border line (underneath)
+        // Shadow polyline (underneath)
         _polylines.add(Polyline(
           polylineId: const PolylineId('route_border'),
           points: points,
-          color: Colors.white.withOpacity(0.8),
+          color: Colors.black26,
           width: 9,
           startCap: Cap.roundCap,
           endCap: Cap.roundCap,
           jointType: JointType.round,
           zIndex: 0,
         ));
-        // Green route line (on top)
+        // Amber route line (on top)
         _polylines.add(Polyline(
           polylineId: const PolylineId('route'),
           points: points,
-          color: const Color(0xFF22C55E), // vert vif
+          color: const Color(0xFFD97706),
           width: 6,
           startCap: Cap.roundCap,
           endCap: Cap.roundCap,
@@ -169,22 +170,29 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       }
     });
 
-    // Fit camera to show full route
+    // Fit camera to show full route + nearby drivers
     final controller = await _mapController.future;
     final latitudes = [origin.latitude, destination.latitude];
     final longitudes = [origin.longitude, destination.longitude];
+    // Include nearby driver markers in bounds
+    for (final m in _markers) {
+      if (m.markerId.value.startsWith('driver_')) {
+        latitudes.add(m.position.latitude);
+        longitudes.add(m.position.longitude);
+      }
+    }
     final bounds = LatLngBounds(
       southwest: LatLng(
-        latitudes.reduce((a, b) => a < b ? a : b) - 0.005,
-        longitudes.reduce((a, b) => a < b ? a : b) - 0.005,
+        latitudes.reduce((a, b) => a < b ? a : b) - 0.003,
+        longitudes.reduce((a, b) => a < b ? a : b) - 0.003,
       ),
       northeast: LatLng(
-        latitudes.reduce((a, b) => a > b ? a : b) + 0.005,
-        longitudes.reduce((a, b) => a > b ? a : b) + 0.005,
+        latitudes.reduce((a, b) => a > b ? a : b) + 0.003,
+        longitudes.reduce((a, b) => a > b ? a : b) + 0.003,
       ),
     );
     controller.animateCamera(
-      CameraUpdate.newLatLngBounds(bounds, 80),
+      CameraUpdate.newLatLngBounds(bounds, 100),
     );
   }
 
@@ -393,9 +401,14 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 target: _currentPosition,
                 zoom: 14,
               ),
-              onMapCreated: (controller) => _mapController.complete(controller),
+              onMapCreated: (controller) async {
+                _mapController.complete(controller);
+                final style = await rootBundle.loadString('assets/map_style.json');
+                controller.setMapStyle(style);
+              },
               markers: _markers,
               polylines: _polylines,
+              trafficEnabled: true,
               myLocationEnabled: true,
               myLocationButtonEnabled: false,
               zoomControlsEnabled: false,
@@ -403,114 +416,114 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             ),
           ),
 
-          // ── Dark header ──
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: Container(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: AppColors.darkGradient,
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
+          // ── Dark header (hidden when destination selected) ──
+          if (_destinationLocation == null)
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: AppColors.darkGradient,
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                  ),
                 ),
-                borderRadius: BorderRadius.only(
-                  bottomLeft: Radius.circular(24.r),
-                  bottomRight: Radius.circular(24.r),
+                child: SafeArea(
+                  bottom: false,
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(20.w, 8.h, 20.w, 12.h),
+                    child: Row(
+                      children: [
+                        Image.asset(
+                          'assets/images/logo.png',
+                          height: 32.h,
+                          errorBuilder: (_, __, ___) => Icon(
+                            Icons.local_taxi_rounded,
+                            color: AppColors.primary,
+                            size: 28.sp,
+                          ),
+                        ),
+                        SizedBox(width: 10.w),
+                        Text(
+                          AppStrings.appName,
+                          style: GoogleFonts.poppins(
+                            fontSize: 18.sp,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white,
+                          ),
+                        ),
+                        const Spacer(),
+                        GestureDetector(
+                          onTap: () => context.push('/profile'),
+                          child: Container(
+                            width: 40.w,
+                            height: 40.w,
+                            decoration: BoxDecoration(
+                              color: AppColors.primary,
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              Icons.person_rounded,
+                              color: Colors.white,
+                              size: 20.sp,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
               ),
-              child: SafeArea(
-                bottom: false,
-                child: Padding(
-                  padding: EdgeInsets.fromLTRB(20.w, 8.h, 20.w, 16.h),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // Logo + profile row
-                      Row(
-                        children: [
-                          Image.asset(
-                            'assets/images/logo.png',
-                            height: 32.h,
-                            errorBuilder: (_, __, ___) => Icon(
-                              Icons.local_taxi_rounded,
-                              color: AppColors.primary,
-                              size: 28.sp,
-                            ),
-                          ),
-                          SizedBox(width: 10.w),
-                          Text(
-                            AppStrings.appName,
-                            style: GoogleFonts.poppins(
-                              fontSize: 18.sp,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.white,
-                            ),
-                          ),
-                          const Spacer(),
-                          GestureDetector(
-                            onTap: () => context.push('/profile'),
-                            child: Container(
-                              width: 40.w,
-                              height: 40.w,
-                              decoration: BoxDecoration(
-                                color: AppColors.primary,
-                                shape: BoxShape.circle,
-                              ),
-                              child: Icon(
-                                Icons.person_rounded,
-                                color: Colors.white,
-                                size: 20.sp,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      SizedBox(height: 14.h),
+            ),
 
-                      // Search bar
-                      GestureDetector(
-                        onTap: _showDestinationSearch,
-                        child: Container(
-                          width: double.infinity,
-                          padding: EdgeInsets.symmetric(
-                            horizontal: 16.w,
-                            vertical: 14.h,
-                          ),
-                          decoration: BoxDecoration(
-                            color: AppColors.darkLight,
-                            borderRadius: BorderRadius.circular(16.r),
-                            border: Border.all(
-                              color: Colors.white.withOpacity(0.08),
-                            ),
-                          ),
-                          child: Row(
-                            children: [
-                              Container(
-                                width: 36.w,
-                                height: 36.w,
-                                decoration: BoxDecoration(
-                                  color: AppColors.primary.withOpacity(0.15),
-                                  borderRadius: BorderRadius.circular(12.r),
-                                ),
-                                child: Icon(
-                                  Icons.search_rounded,
-                                  color: AppColors.primary,
-                                  size: 20.sp,
-                                ),
-                              ),
-                              SizedBox(width: 12.w),
-                              Text(
-                                AppStrings.whereToGo,
-                                style: GoogleFonts.poppins(
-                                  fontSize: 15.sp,
-                                  color: Colors.white.withOpacity(0.5),
-                                  fontWeight: FontWeight.w400,
-                                ),
-                              ),
-                            ],
-                          ),
+          // ── Search bar (hidden when destination selected) ──
+          if (_destinationLocation == null)
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 72.h,
+              left: 20.w,
+              right: 20.w,
+              child: GestureDetector(
+                onTap: _showDestinationSearch,
+                child: Container(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: 14.w,
+                    vertical: 12.h,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(14.r),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.08),
+                        blurRadius: 16,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 32.w,
+                        height: 32.w,
+                        decoration: BoxDecoration(
+                          color: AppColors.primary.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(10.r),
+                        ),
+                        child: Icon(
+                          Icons.search_rounded,
+                          color: AppColors.primary,
+                          size: 18.sp,
+                        ),
+                      ),
+                      SizedBox(width: 12.w),
+                      Text(
+                        AppStrings.whereToGo,
+                        style: GoogleFonts.poppins(
+                          fontSize: 14.sp,
+                          color: AppColors.textHint,
+                          fontWeight: FontWeight.w400,
                         ),
                       ),
                     ],
@@ -518,7 +531,43 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 ),
               ),
             ),
-          ),
+
+          // ── Back button (visible when destination selected) ──
+          if (_destinationLocation != null)
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 8.h,
+              left: 16.w,
+              child: GestureDetector(
+                onTap: () {
+                  setState(() {
+                    _destinationLocation = null;
+                    _destinationAddress = '';
+                    _priceEstimate = null;
+                    _polylines.clear();
+                    _markers.removeWhere((m) =>
+                        m.markerId.value == 'pickup' ||
+                        m.markerId.value == 'destination');
+                  });
+                  _ctaAnimController.reverse();
+                },
+                child: Container(
+                  width: 44.w,
+                  height: 44.w,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(14.r),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.1),
+                        blurRadius: 12,
+                        offset: const Offset(0, 3),
+                      ),
+                    ],
+                  ),
+                  child: Icon(Icons.arrow_back_rounded, color: AppColors.dark, size: 22.sp),
+                ),
+              ),
+            ),
 
           // ── My location FABs ──
           Positioned(
@@ -541,9 +590,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
           // ── Scrollable bottom sheet ──
           DraggableScrollableSheet(
-            initialChildSize: 0.42,
-            minChildSize: 0.15,
-            maxChildSize: 0.70,
+            initialChildSize: 0.38,
+            minChildSize: 0.12,
+            maxChildSize: 0.65,
             builder: (context, scrollController) {
               return Container(
                 decoration: BoxDecoration(
@@ -553,9 +602,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   ),
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withOpacity(0.08),
-                      blurRadius: 24,
-                      offset: const Offset(0, -6),
+                      color: Colors.black.withOpacity(0.06),
+                      blurRadius: 20,
+                      offset: const Offset(0, -4),
                     ),
                   ],
                 ),
@@ -566,8 +615,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     // Drag handle
                     Center(
                       child: Container(
-                        margin: EdgeInsets.only(top: 12.h, bottom: 16.h),
-                        width: 40.w,
+                        margin: EdgeInsets.only(top: 10.h, bottom: 14.h),
+                        width: 36.w,
                         height: 4.h,
                         decoration: BoxDecoration(
                           color: AppColors.border,
@@ -597,23 +646,11 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                         ],
                       ),
                     ),
-                    SizedBox(height: 18.h),
+                    SizedBox(height: 20.h),
 
                     // Vehicle type cards
-                    Padding(
-                      padding: EdgeInsets.only(left: 20.w),
-                      child: Text(
-                        'Type de véhicule',
-                        style: GoogleFonts.poppins(
-                          fontSize: 14.sp,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.textPrimary,
-                        ),
-                      ),
-                    ),
-                    SizedBox(height: 10.h),
                     SizedBox(
-                      height: 100.h,
+                      height: 110.h,
                       child: ListView(
                         scrollDirection: Axis.horizontal,
                         padding: EdgeInsets.symmetric(horizontal: 20.w),
@@ -652,79 +689,94 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                         ],
                       ),
                     ),
-                    SizedBox(height: 14.h),
+                    SizedBox(height: 20.h),
+
+                    // Divider
+                    Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 20.w),
+                      child: Divider(height: 1, color: AppColors.border.withOpacity(0.5)),
+                    ),
+                    SizedBox(height: 16.h),
 
                     // Payment method selector
                     Padding(
                       padding: EdgeInsets.symmetric(horizontal: 20.w),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                      child: Row(
                         children: [
+                          Icon(Icons.payment_rounded, size: 16.sp, color: AppColors.textHint),
+                          SizedBox(width: 8.w),
                           Text(
                             AppStrings.paymentMethod,
                             style: GoogleFonts.poppins(
-                              fontSize: 14.sp,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.textPrimary,
+                              fontSize: 13.sp,
+                              fontWeight: FontWeight.w500,
+                              color: AppColors.textSecondary,
                             ),
-                          ),
-                          SizedBox(height: 8.h),
-                          Row(
-                            children: [
-                              _PaymentPill(
-                                label: AppStrings.cash,
-                                icon: Icons.money_rounded,
-                                isActive: _selectedPayment == 0,
-                                onTap: () => setState(() => _selectedPayment = 0),
-                              ),
-                              SizedBox(width: 8.w),
-                              _PaymentPill(
-                                label: 'M-Pesa',
-                                icon: Icons.phone_android_rounded,
-                                isActive: _selectedPayment == 1,
-                                onTap: () => setState(() => _selectedPayment = 1),
-                              ),
-                              SizedBox(width: 8.w),
-                              _PaymentPill(
-                                label: 'Airtel',
-                                icon: Icons.phone_android_rounded,
-                                isActive: _selectedPayment == 2,
-                                onTap: () => setState(() => _selectedPayment = 2),
-                              ),
-                              SizedBox(width: 8.w),
-                              _PaymentPill(
-                                label: 'Orange',
-                                icon: Icons.phone_android_rounded,
-                                isActive: _selectedPayment == 3,
-                                onTap: () => setState(() => _selectedPayment = 3),
-                              ),
-                            ],
                           ),
                         ],
                       ),
                     ),
-                    SizedBox(height: 14.h),
+                    SizedBox(height: 10.h),
+                    Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 20.w),
+                      child: Row(
+                        children: [
+                          _PaymentPill(
+                            label: AppStrings.cash,
+                            icon: Icons.money_rounded,
+                            isActive: _selectedPayment == 0,
+                            onTap: () => setState(() => _selectedPayment = 0),
+                          ),
+                          SizedBox(width: 8.w),
+                          _PaymentPill(
+                            label: 'M-Pesa',
+                            icon: Icons.phone_android_rounded,
+                            isActive: _selectedPayment == 1,
+                            onTap: () => setState(() => _selectedPayment = 1),
+                          ),
+                          SizedBox(width: 8.w),
+                          _PaymentPill(
+                            label: 'Airtel',
+                            icon: Icons.phone_android_rounded,
+                            isActive: _selectedPayment == 2,
+                            onTap: () => setState(() => _selectedPayment = 2),
+                          ),
+                          SizedBox(width: 8.w),
+                          _PaymentPill(
+                            label: 'Orange',
+                            icon: Icons.phone_android_rounded,
+                            isActive: _selectedPayment == 3,
+                            onTap: () => setState(() => _selectedPayment = 3),
+                          ),
+                        ],
+                      ),
+                    ),
+                    SizedBox(height: 16.h),
 
                     // Destination summary (when selected)
-                    if (_destinationLocation != null)
+                    if (_destinationLocation != null) ...[
+                      Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 20.w),
+                        child: Divider(height: 1, color: AppColors.border.withOpacity(0.5)),
+                      ),
+                      SizedBox(height: 14.h),
                       Padding(
                         padding: EdgeInsets.symmetric(horizontal: 20.w),
                         child: Container(
-                          padding: EdgeInsets.all(12.w),
+                          padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 10.h),
                           decoration: BoxDecoration(
-                            color: AppColors.success.withOpacity(0.08),
-                            borderRadius: BorderRadius.circular(14.r),
-                            border: Border.all(color: AppColors.success.withOpacity(0.2)),
+                            color: AppColors.success.withOpacity(0.06),
+                            borderRadius: BorderRadius.circular(12.r),
                           ),
                           child: Row(
                             children: [
-                              Icon(Icons.location_on_rounded, color: AppColors.success, size: 20.sp),
+                              Icon(Icons.location_on_rounded, color: AppColors.success, size: 18.sp),
                               SizedBox(width: 10.w),
                               Expanded(
                                 child: Text(
                                   _destinationAddress,
                                   style: GoogleFonts.poppins(
-                                    fontSize: 13.sp,
+                                    fontSize: 12.sp,
                                     fontWeight: FontWeight.w500,
                                     color: AppColors.textPrimary,
                                   ),
@@ -745,16 +797,17 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                   });
                                   _ctaAnimController.reverse();
                                 },
-                                child: Icon(Icons.close_rounded, color: AppColors.textHint, size: 18.sp),
+                                child: Icon(Icons.close_rounded, color: AppColors.textHint, size: 16.sp),
                               ),
                             ],
                           ),
                         ),
                       ),
-                    if (_destinationLocation != null) SizedBox(height: 14.h),
+                      SizedBox(height: 12.h),
+                    ],
 
                     // Price estimate display
-                    if (_priceEstimate != null)
+                    if (_priceEstimate != null) ...[
                       Padding(
                         padding: EdgeInsets.symmetric(horizontal: 20.w),
                         child: Row(
@@ -785,7 +838,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                           ],
                         ),
                       ),
-                    if (_priceEstimate != null) SizedBox(height: 14.h),
+                      SizedBox(height: 16.h),
+                    ],
 
                     // CTA button – only visible when destination is chosen
                     if (_destinationLocation != null)
@@ -807,12 +861,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                 begin: Alignment.centerLeft,
                                 end: Alignment.centerRight,
                               ),
-                              borderRadius: BorderRadius.circular(18.r),
+                              borderRadius: BorderRadius.circular(16.r),
                               boxShadow: [
                                 BoxShadow(
-                                  color: AppColors.primaryDark.withOpacity(0.35),
-                                  blurRadius: 18,
-                                  offset: const Offset(0, 6),
+                                  color: AppColors.primaryDark.withOpacity(0.3),
+                                  blurRadius: 14,
+                                  offset: const Offset(0, 5),
                                 ),
                               ],
                             ),
@@ -826,25 +880,22 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                     _estimatePrice();
                                   }
                                 },
-                                borderRadius: BorderRadius.circular(18.r),
+                                borderRadius: BorderRadius.circular(16.r),
                                 child: Padding(
-                                  padding: EdgeInsets.symmetric(
-                                    vertical: 16.h,
-                                    horizontal: 8.w,
-                                  ),
+                                  padding: EdgeInsets.symmetric(vertical: 14.h),
                                   child: Row(
                                     mainAxisAlignment: MainAxisAlignment.center,
                                     children: [
                                       Icon(
                                         Icons.local_taxi_rounded,
-                                        size: 22.sp,
+                                        size: 20.sp,
                                         color: Colors.white,
                                       ),
                                       SizedBox(width: 10.w),
                                       Text(
                                         AppStrings.orderRide,
                                         style: GoogleFonts.poppins(
-                                          fontSize: 16.sp,
+                                          fontSize: 15.sp,
                                           fontWeight: FontWeight.w700,
                                           letterSpacing: 0.2,
                                           color: Colors.white,
@@ -853,7 +904,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                       SizedBox(width: 8.w),
                                       Icon(
                                         Icons.arrow_forward_rounded,
-                                        size: 18.sp,
+                                        size: 16.sp,
                                         color: Colors.white.withOpacity(0.8),
                                       ),
                                     ],
@@ -864,7 +915,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                           ),
                         ),
                       ),
-                    SizedBox(height: 16.h),
+                    SizedBox(height: 14.h),
                   ],
                 ),
               );
@@ -948,7 +999,7 @@ class _MapFab extends StatelessWidget {
         height: 48.w,
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(14.r),
+          shape: BoxShape.circle,
           boxShadow: [
             BoxShadow(
               color: Colors.black.withOpacity(0.08),
@@ -1032,11 +1083,11 @@ class _VehicleCard extends StatelessWidget {
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
-        width: 130.w,
-        padding: EdgeInsets.all(14.w),
+        width: 120.w,
+        padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 10.h),
         decoration: BoxDecoration(
           color: isSelected ? AppColors.primary.withOpacity(0.08) : AppColors.surfaceVariant,
-          borderRadius: BorderRadius.circular(18.r),
+          borderRadius: BorderRadius.circular(16.r),
           border: Border.all(
             color: isSelected ? AppColors.primary : Colors.transparent,
             width: 1.5,
@@ -1044,11 +1095,10 @@ class _VehicleCard extends StatelessWidget {
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              width: 36.w,
-              height: 36.w,
+              width: 32.w,
+              height: 32.w,
               decoration: BoxDecoration(
                 color: isSelected
                     ? AppColors.primary.withOpacity(0.15)
@@ -1057,25 +1107,29 @@ class _VehicleCard extends StatelessWidget {
               ),
               child: Icon(
                 icon,
-                size: 20.sp,
+                size: 18.sp,
                 color: isSelected ? AppColors.primary : AppColors.textSecondary,
               ),
             ),
-            SizedBox(height: 8.h),
+            const Spacer(),
             Text(
               title,
               style: GoogleFonts.poppins(
-                fontSize: 13.sp,
+                fontSize: 12.sp,
                 fontWeight: FontWeight.w600,
                 color: isSelected ? AppColors.primary : AppColors.textPrimary,
               ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
             Text(
               subtitle,
               style: GoogleFonts.poppins(
-                fontSize: 11.sp,
+                fontSize: 10.sp,
                 color: AppColors.textHint,
               ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
           ],
         ),

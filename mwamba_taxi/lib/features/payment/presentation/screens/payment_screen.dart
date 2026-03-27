@@ -10,6 +10,45 @@ import '../../../../core/di/injection.dart';
 import '../../../../core/network/api_client.dart';
 import '../../../../core/theme/app_colors.dart';
 
+class _OperatorInfo {
+  final String name;
+  final Color color;
+  const _OperatorInfo(this.name, this.color);
+}
+
+_OperatorInfo? _detectOperator(String phone) {
+  final clean = phone.replaceAll(RegExp(r'[\s\-\+]'), '');
+  String prefix;
+  if (clean.startsWith('243') && clean.length >= 5) {
+    prefix = clean.substring(3, 5);
+  } else if (clean.startsWith('0') && clean.length >= 3) {
+    prefix = clean.substring(1, 3);
+  } else if (clean.length >= 2 && !clean.startsWith('243')) {
+    prefix = clean.substring(0, 2);
+  } else {
+    return null;
+  }
+  switch (prefix) {
+    case '81':
+    case '82':
+    case '83':
+      return const _OperatorInfo('Vodacom', Color(0xFFE60000));
+    case '97':
+    case '99':
+    case '98':
+      return const _OperatorInfo('Airtel', Color(0xFFFF0000));
+    case '80':
+    case '84':
+    case '85':
+    case '89':
+      return const _OperatorInfo('Orange', Color(0xFFFF6600));
+    default:
+      return null;
+  }
+}
+
+double _toNum(dynamic v) => double.tryParse(v?.toString() ?? '') ?? 0;
+
 class PaymentScreen extends StatefulWidget {
   const PaymentScreen({super.key});
 
@@ -37,8 +76,11 @@ class _PaymentScreenState extends State<PaymentScreen> {
         _api.dio.get(ApiConstants.walletTransactions),
       ]);
       setState(() {
-        _wallet = results[0].data;
-        _transactions = results[1].data['results'] ?? results[1].data;
+        _wallet = results[0].data is Map ? results[0].data : null;
+        final txData = results[1].data;
+        _transactions = txData is List
+            ? txData
+            : (txData is Map ? (txData['results'] ?? []) : []);
         _loading = false;
       });
     } catch (_) {
@@ -116,14 +158,67 @@ class _PaymentScreenState extends State<PaymentScreen> {
               TextField(
                 controller: phoneCtrl,
                 keyboardType: TextInputType.phone,
+                onChanged: (_) => setSheetState(() {}),
                 decoration: InputDecoration(
                   labelText: 'Numéro Mobile Money',
-                  hintText: '+243 8XX XXX XXX',
+                  hintText: '0XX XXX XXXX',
                   filled: true,
                   fillColor: AppColors.inputFill,
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(14.r),
                     borderSide: BorderSide.none,
+                  ),
+                  prefixIcon: Padding(
+                    padding: EdgeInsets.only(left: 14.w, right: 8.w),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          '🇨🇩 +243',
+                          style: GoogleFonts.poppins(
+                            fontSize: 14.sp,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                        SizedBox(width: 6.w),
+                        Container(
+                          width: 1,
+                          height: 20.h,
+                          color: AppColors.border,
+                        ),
+                      ],
+                    ),
+                  ),
+                  prefixIconConstraints: BoxConstraints(minWidth: 0, minHeight: 0),
+                  suffixIcon: Builder(
+                    builder: (_) {
+                      final op = _detectOperator(phoneCtrl.text.trim());
+                      if (op == null) return const SizedBox.shrink();
+                      return Container(
+                        margin: EdgeInsets.only(right: 10.w),
+                        padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 6.h),
+                        decoration: BoxDecoration(
+                          color: op.color.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8.r),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.sim_card_rounded, size: 16.sp, color: op.color),
+                            SizedBox(width: 4.w),
+                            Text(
+                              op.name,
+                              style: GoogleFonts.poppins(
+                                fontSize: 11.sp,
+                                fontWeight: FontWeight.w700,
+                                color: op.color,
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
                   ),
                 ),
               ),
@@ -138,8 +233,11 @@ class _PaymentScreenState extends State<PaymentScreen> {
                           final amount =
                               int.tryParse(amountCtrl.text.trim()) ?? 0;
                           if (amount < 500) return;
-                          final phone = phoneCtrl.text.trim();
-                          if (phone.isEmpty) return;
+                          final rawPhone = phoneCtrl.text.trim();
+                          if (rawPhone.isEmpty) return;
+                          final phone = rawPhone.startsWith('0')
+                              ? '+243${rawPhone.substring(1)}'
+                              : '+243$rawPhone';
                           setSheetState(() => depositing = true);
                           try {
                             await _api.dio.post(
@@ -161,11 +259,12 @@ class _PaymentScreenState extends State<PaymentScreen> {
                           } on DioException catch (e) {
                             setSheetState(() => depositing = false);
                             if (ctx.mounted) {
+                              final errData = e.response?.data;
+                              final msg = errData is Map
+                                  ? (errData['detail'] ?? 'Erreur lors du dépôt')
+                                  : 'Erreur lors du dépôt';
                               ScaffoldMessenger.of(ctx).showSnackBar(
-                                SnackBar(
-                                    content: Text(
-                                        e.response?.data?['detail'] ??
-                                            'Erreur lors du dépôt')),
+                                SnackBar(content: Text(msg.toString())),
                               );
                             }
                           }
@@ -198,7 +297,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
   @override
   Widget build(BuildContext context) {
     final fmt = NumberFormat('#,###');
-    final balance = (_wallet?['balance'] ?? 0).toDouble();
+    final balance = _toNum(_wallet?['balance']);
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -284,7 +383,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                                     ],
                                   ),
                                   const Spacer(),
-                                  if ((_wallet?['held_amount'] ?? 0) > 0)
+                                  if (_toNum(_wallet?['held_amount']) > 0)
                                     Container(
                                       padding: EdgeInsets.symmetric(
                                           horizontal: 10.w, vertical: 4.h),
@@ -295,7 +394,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                                             BorderRadius.circular(8.r),
                                       ),
                                       child: Text(
-                                        '🔒 ${fmt.format(_wallet!['held_amount'])} bloqué',
+                                        '🔒 ${fmt.format(_toNum(_wallet!['held_amount']))} bloqué',
                                         style: GoogleFonts.poppins(
                                           fontSize: 10.sp,
                                           color: AppColors.warning,
@@ -522,7 +621,7 @@ class _TransactionTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final amount = (tx['amount'] ?? 0).toDouble();
+    final amount = _toNum(tx['amount']);
     final txType = tx['tx_type'] ?? '';
     final description = tx['description'] ?? '';
     final status = tx['status'] ?? '';
@@ -585,321 +684,6 @@ class _TransactionTile extends StatelessWidget {
               fontSize: 15.sp,
               fontWeight: FontWeight.w700,
               color: isCredit ? AppColors.success : AppColors.textPrimary,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class PaymentScreen extends StatefulWidget {
-  const PaymentScreen({super.key});
-
-  @override
-  State<PaymentScreen> createState() => _PaymentScreenState();
-}
-
-class _PaymentScreenState extends State<PaymentScreen> {
-  final ApiClient _api = getIt<ApiClient>();
-  List<dynamic> _payments = [];
-  bool _loading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadPayments();
-  }
-
-  Future<void> _loadPayments() async {
-    setState(() => _loading = true);
-    try {
-      final resp = await _api.dio.get(ApiConstants.paymentHistory);
-      setState(() {
-        _payments = resp.data['results'] ?? resp.data;
-        _loading = false;
-      });
-    } catch (_) {
-      setState(() => _loading = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      body: SafeArea(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Header
-            Padding(
-              padding: EdgeInsets.fromLTRB(20.w, 16.h, 20.w, 8.h),
-              child: Text(
-                AppStrings.tabPayment,
-                style: GoogleFonts.poppins(
-                  fontSize: 26.sp,
-                  fontWeight: FontWeight.w800,
-                  color: AppColors.textPrimary,
-                ),
-              ),
-            ),
-
-            // Payment method card
-            Padding(
-              padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 12.h),
-              child: Container(
-                width: double.infinity,
-                padding: EdgeInsets.all(20.w),
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    colors: AppColors.darkGradient,
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                  borderRadius: BorderRadius.circular(20.r),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Container(
-                          width: 44.w,
-                          height: 44.w,
-                          decoration: BoxDecoration(
-                            color: AppColors.primary.withOpacity(0.2),
-                            borderRadius: BorderRadius.circular(12.r),
-                          ),
-                          child: Icon(
-                            Icons.account_balance_wallet_rounded,
-                            color: AppColors.primary,
-                            size: 24.sp,
-                          ),
-                        ),
-                        SizedBox(width: 14.w),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              AppStrings.mobileMoney,
-                              style: GoogleFonts.poppins(
-                                fontSize: 16.sp,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.white,
-                              ),
-                            ),
-                            Text(
-                              'Moyen de paiement principal',
-                              style: GoogleFonts.poppins(
-                                fontSize: 12.sp,
-                                color: Colors.white.withOpacity(0.6),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                    SizedBox(height: 20.h),
-                    Row(
-                      children: [
-                        _PaymentMethodChip(
-                          icon: Icons.phone_android_rounded,
-                          label: 'M-Pesa',
-                          isActive: true,
-                        ),
-                        SizedBox(width: 10.w),
-                        _PaymentMethodChip(
-                          icon: Icons.money_rounded,
-                          label: AppStrings.cash,
-                          isActive: false,
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ),
-
-            // Recent transactions header
-            Padding(
-              padding: EdgeInsets.fromLTRB(20.w, 8.h, 20.w, 12.h),
-              child: Text(
-                'Transactions récentes',
-                style: GoogleFonts.poppins(
-                  fontSize: 16.sp,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.textPrimary,
-                ),
-              ),
-            ),
-
-            // Transactions list
-            Expanded(
-              child: _loading
-                  ? const Center(child: CircularProgressIndicator())
-                  : _payments.isEmpty
-                      ? Center(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Container(
-                                width: 72.w,
-                                height: 72.w,
-                                decoration: BoxDecoration(
-                                  color: AppColors.primary.withOpacity(0.1),
-                                  borderRadius: BorderRadius.circular(20.r),
-                                ),
-                                child: Icon(
-                                  Icons.receipt_long_rounded,
-                                  size: 36.sp,
-                                  color: AppColors.primary,
-                                ),
-                              ),
-                              SizedBox(height: 16.h),
-                              Text(
-                                'Aucune transaction',
-                                style: GoogleFonts.poppins(
-                                  fontSize: 16.sp,
-                                  fontWeight: FontWeight.w600,
-                                  color: AppColors.textPrimary,
-                                ),
-                              ),
-                              SizedBox(height: 4.h),
-                              Text(
-                                'Vos paiements apparaîtront ici',
-                                style: GoogleFonts.poppins(
-                                  fontSize: 13.sp,
-                                  color: AppColors.textSecondary,
-                                ),
-                              ),
-                            ],
-                          ),
-                        )
-                      : RefreshIndicator(
-                          onRefresh: _loadPayments,
-                          color: AppColors.primary,
-                          child: ListView.separated(
-                            padding: EdgeInsets.fromLTRB(20.w, 0, 20.w, 24.h),
-                            itemCount: _payments.length,
-                            separatorBuilder: (_, __) => SizedBox(height: 10.h),
-                            itemBuilder: (context, index) {
-                              final payment = _payments[index];
-                              return _TransactionTile(payment: payment);
-                            },
-                          ),
-                        ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _PaymentMethodChip extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final bool isActive;
-
-  const _PaymentMethodChip({
-    required this.icon,
-    required this.label,
-    required this.isActive,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 8.h),
-      decoration: BoxDecoration(
-        color: isActive
-            ? AppColors.primary.withOpacity(0.2)
-            : Colors.white.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(12.r),
-        border: Border.all(
-          color: isActive ? AppColors.primary : Colors.white.withOpacity(0.15),
-        ),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 16.sp, color: isActive ? AppColors.primary : Colors.white60),
-          SizedBox(width: 6.w),
-          Text(
-            label,
-            style: GoogleFonts.poppins(
-              fontSize: 12.sp,
-              fontWeight: FontWeight.w600,
-              color: isActive ? AppColors.primary : Colors.white60,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _TransactionTile extends StatelessWidget {
-  final Map<String, dynamic> payment;
-  const _TransactionTile({required this.payment});
-
-  @override
-  Widget build(BuildContext context) {
-    final amount = payment['amount'] ?? '0';
-    final status = payment['status'] ?? '';
-    final isSuccess = status == 'completed' || status == 'success';
-
-    return Container(
-      padding: EdgeInsets.all(14.w),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16.r),
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.shadow,
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 44.w,
-            height: 44.w,
-            decoration: BoxDecoration(
-              color: (isSuccess ? AppColors.success : AppColors.warning).withOpacity(0.1),
-              borderRadius: BorderRadius.circular(12.r),
-            ),
-            child: Icon(
-              isSuccess ? Icons.check_circle_rounded : Icons.pending_rounded,
-              color: isSuccess ? AppColors.success : AppColors.warning,
-              size: 22.sp,
-            ),
-          ),
-          SizedBox(width: 12.w),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Paiement course',
-                  style: GoogleFonts.poppins(fontSize: 14.sp, fontWeight: FontWeight.w600),
-                ),
-                Text(
-                  isSuccess ? 'Complété' : 'En attente',
-                  style: GoogleFonts.poppins(fontSize: 12.sp, color: AppColors.textSecondary),
-                ),
-              ],
-            ),
-          ),
-          Text(
-            '$amount CDF',
-            style: GoogleFonts.poppins(
-              fontSize: 15.sp,
-              fontWeight: FontWeight.w700,
-              color: AppColors.textPrimary,
             ),
           ),
         ],

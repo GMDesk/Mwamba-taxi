@@ -9,6 +9,45 @@ import '../../../../core/network/api_client.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/widgets/app_alert.dart';
 
+class _OperatorInfo {
+  final String name;
+  final Color color;
+  const _OperatorInfo(this.name, this.color);
+}
+
+_OperatorInfo? _detectOperator(String phone) {
+  final clean = phone.replaceAll(RegExp(r'[\s\-\+]'), '');
+  String prefix;
+  if (clean.startsWith('243') && clean.length >= 5) {
+    prefix = clean.substring(3, 5);
+  } else if (clean.startsWith('0') && clean.length >= 3) {
+    prefix = clean.substring(1, 3);
+  } else if (clean.length >= 2 && !clean.startsWith('243')) {
+    prefix = clean.substring(0, 2);
+  } else {
+    return null;
+  }
+  switch (prefix) {
+    case '81':
+    case '82':
+    case '83':
+      return const _OperatorInfo('Vodacom', Color(0xFFE60000));
+    case '97':
+    case '99':
+    case '98':
+      return const _OperatorInfo('Airtel', Color(0xFFFF0000));
+    case '80':
+    case '84':
+    case '85':
+    case '89':
+      return const _OperatorInfo('Orange', Color(0xFFFF6600));
+    default:
+      return null;
+  }
+}
+
+double _toNum(dynamic v) => double.tryParse(v?.toString() ?? '') ?? 0;
+
 class EarningsScreen extends StatefulWidget {
   const EarningsScreen({super.key});
 
@@ -51,13 +90,13 @@ class _EarningsScreenState extends State<EarningsScreen> {
     final fmt = NumberFormat('#,###');
     switch (_selectedFilter) {
       case 0:
-        return fmt.format(_earnings!['today'] ?? 0);
+        return fmt.format(_toNum(_earnings!['today']));
       case 1:
-        return fmt.format(_earnings!['this_week'] ?? 0);
+        return fmt.format(_toNum(_earnings!['this_week']));
       case 2:
-        return fmt.format(_earnings!['this_month'] ?? 0);
+        return fmt.format(_toNum(_earnings!['this_month']));
       default:
-        return fmt.format(_earnings!['today'] ?? 0);
+        return fmt.format(_toNum(_earnings!['today']));
     }
   }
 
@@ -81,7 +120,7 @@ class _EarningsScreenState extends State<EarningsScreen> {
       backgroundColor: Colors.transparent,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSheetState) {
-          final walletBalance = (_earnings?['wallet_balance'] ?? 0).toDouble();
+          final walletBalance = _toNum(_earnings?['wallet_balance']);
           return Container(
             padding: EdgeInsets.fromLTRB(
                 20.w, 12.h, 20.w, MediaQuery.of(ctx).viewInsets.bottom + 24.h),
@@ -129,14 +168,67 @@ class _EarningsScreenState extends State<EarningsScreen> {
                 TextField(
                   controller: phoneCtrl,
                   keyboardType: TextInputType.phone,
+                  onChanged: (_) => setSheetState(() {}),
                   decoration: InputDecoration(
                     labelText: 'Numéro Mobile Money',
-                    hintText: '+243 8XX XXX XXX',
+                    hintText: '0XX XXX XXXX',
                     filled: true,
                     fillColor: AppColors.inputFill,
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(14.r),
                       borderSide: BorderSide.none,
+                    ),
+                    prefixIcon: Padding(
+                      padding: EdgeInsets.only(left: 14.w, right: 8.w),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            '\ud83c\udde8\ud83c\udde9 +243',
+                            style: TextStyle(
+                              fontSize: 14.sp,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.textPrimary,
+                            ),
+                          ),
+                          SizedBox(width: 6.w),
+                          Container(
+                            width: 1,
+                            height: 20.h,
+                            color: AppColors.border,
+                          ),
+                        ],
+                      ),
+                    ),
+                    prefixIconConstraints: BoxConstraints(minWidth: 0, minHeight: 0),
+                    suffixIcon: Builder(
+                      builder: (_) {
+                        final op = _detectOperator(phoneCtrl.text.trim());
+                        if (op == null) return const SizedBox.shrink();
+                        return Container(
+                          margin: EdgeInsets.only(right: 10.w),
+                          padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 6.h),
+                          decoration: BoxDecoration(
+                            color: op.color.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(8.r),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.sim_card_rounded, size: 16.sp, color: op.color),
+                              SizedBox(width: 4.w),
+                              Text(
+                                op.name,
+                                style: TextStyle(
+                                  fontSize: 11.sp,
+                                  fontWeight: FontWeight.w700,
+                                  color: op.color,
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
                     ),
                   ),
                 ),
@@ -150,8 +242,11 @@ class _EarningsScreenState extends State<EarningsScreen> {
                         : () async {
                             final amount = int.tryParse(amountCtrl.text.trim()) ?? 0;
                             if (amount < 1000) return;
-                            final phone = phoneCtrl.text.trim();
-                            if (phone.isEmpty) return;
+                            final rawPhone = phoneCtrl.text.trim();
+                            if (rawPhone.isEmpty) return;
+                            final phone = rawPhone.startsWith('0')
+                                ? '+243${rawPhone.substring(1)}'
+                                : '+243$rawPhone';
                             setSheetState(() => sending = true);
                             try {
                               await _api.dio.post(
@@ -169,10 +264,12 @@ class _EarningsScreenState extends State<EarningsScreen> {
                             } on DioException catch (e) {
                               setSheetState(() => sending = false);
                               if (ctx.mounted) {
+                                final errData = e.response?.data;
+                                final msg = errData is Map
+                                    ? (errData['detail'] ?? 'Erreur lors du retrait')
+                                    : 'Erreur lors du retrait';
                                 ScaffoldMessenger.of(ctx).showSnackBar(
-                                  SnackBar(
-                                      content: Text(e.response?.data?['detail'] ??
-                                          'Erreur lors du retrait')),
+                                  SnackBar(content: Text(msg.toString())),
                                 );
                               }
                             }
@@ -335,7 +432,7 @@ class _EarningsScreenState extends State<EarningsScreen> {
                                                   fontSize: 13.sp)),
                                           SizedBox(height: 4.h),
                                           Text(
-                                            '${fmt.format(_earnings!['wallet_balance'] ?? 0)} CDF',
+                                            '${fmt.format(_toNum(_earnings!['wallet_balance']))} CDF',
                                             style: TextStyle(
                                                 color: Colors.white,
                                                 fontSize: 24.sp,

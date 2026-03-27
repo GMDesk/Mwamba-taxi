@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:equatable/equatable.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
@@ -226,12 +227,21 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
   }
 
   String _extractError(dynamic e) {
-    try {
-      if (e.response?.data != null) {
-        final data = e.response!.data;
+    if (e is DioException) {
+      switch (e.type) {
+        case DioExceptionType.connectionTimeout:
+        case DioExceptionType.sendTimeout:
+        case DioExceptionType.receiveTimeout:
+          return 'Connexion lente. Vérifiez votre réseau et réessayez.';
+        case DioExceptionType.connectionError:
+          return 'Impossible de se connecter au serveur. Vérifiez votre connexion internet.';
+        default:
+          break;
+      }
+      try {
+        final data = e.response?.data;
         if (data is Map) {
           if (data.containsKey('detail')) return data['detail'].toString();
-          // Handle DRF field-level validation errors
           final errors = <String>[];
           for (final value in data.values) {
             if (value is List) {
@@ -243,8 +253,8 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
           if (errors.isNotEmpty) return errors.first;
         }
         if (data is String && data.isNotEmpty) return data;
-      }
-    } catch (_) {}
+      } catch (_) {}
+    }
     return 'Une erreur est survenue. Veuillez réessayer.';
   }
 }
