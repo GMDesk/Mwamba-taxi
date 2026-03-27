@@ -12,7 +12,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 env = environ.Env(
     DEBUG=(bool, False),
-    ALLOWED_HOSTS=(list, ["localhost", "127.0.0.1", "192.168.62.127"]),
+    ALLOWED_HOSTS=(list, ["localhost", "127.0.0.1", "mwambataxi.com", "www.mwambataxi.com", "34.62.184.191", "192.168.62.127"]),
     CORS_ALLOWED_ORIGINS=(list, []),
     COMMISSION_RATE=(int, 20),
 )
@@ -214,8 +214,7 @@ SPECTACULAR_SETTINGS = {
 # CORS
 # ---------------------------------------------------------------------------
 CORS_ALLOWED_ORIGINS = env("CORS_ALLOWED_ORIGINS")
-if DEBUG:
-    CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_ALL_ORIGINS = env.bool("CORS_ALLOW_ALL_ORIGINS", default=DEBUG)
 
 # ---------------------------------------------------------------------------
 # Internationalization
@@ -259,6 +258,7 @@ TWILIO_PHONE_NUMBER = env("TWILIO_PHONE_NUMBER", default="")
 # ---------------------------------------------------------------------------
 PAWAPAY_API_TOKEN = env("PAWAPAY_API_TOKEN", default="")
 PAWAPAY_WEBHOOK_SECRET = env("PAWAPAY_WEBHOOK_SECRET", default="")
+PAWAPAY_API_URL = env("PAWAPAY_API_URL", default="https://api.sandbox.pawapay.io")
 
 # ---------------------------------------------------------------------------
 # Firebase

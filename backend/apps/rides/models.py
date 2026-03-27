@@ -12,6 +12,7 @@ class Ride(models.Model):
         REQUESTED = "requested", "Demandée"
         ACCEPTED = "accepted", "Acceptée"
         DRIVER_ARRIVING = "driver_arriving", "Chauffeur en route"
+        DRIVER_ARRIVED = "driver_arrived", "Chauffeur arrivé"
         IN_PROGRESS = "in_progress", "En cours"
         COMPLETED = "completed", "Terminée"
         CANCELLED_BY_PASSENGER = "cancelled_passenger", "Annulée par passager"
@@ -131,8 +132,9 @@ class Ride(models.Model):
 
     def calculate_commission(self):
         """Calculate platform commission & driver earnings."""
+        from decimal import Decimal
         price = self.final_price or self.estimated_price
-        rate = settings.COMMISSION_RATE / 100
+        rate = Decimal(settings.COMMISSION_RATE) / Decimal(100)
         self.commission_amount = round(price * rate, 2)
         self.driver_earnings = price - self.commission_amount - self.discount_amount
 

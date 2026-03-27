@@ -102,6 +102,7 @@ class RequestRideView(APIView):
                 Ride.Status.REQUESTED,
                 Ride.Status.ACCEPTED,
                 Ride.Status.DRIVER_ARRIVING,
+                Ride.Status.DRIVER_ARRIVED,
                 Ride.Status.IN_PROGRESS,
             ],
         ).exists()
@@ -191,7 +192,7 @@ class AcceptRideView(APIView):
         _notify_passenger_ws(ride, "driver_assigned", {
             "status": "accepted",
             "driver_name": request.user.full_name,
-            "driver_id": request.user.id,
+            "driver_id": str(request.user.id),
             "driver_phone": request.user.phone_number,
             "driver_photo": request.user.avatar.url if request.user.avatar else None,
             "driver_rating": float(profile.rating_average) if profile.rating_average else None,
@@ -284,7 +285,7 @@ class StartRideView(APIView):
             ride = Ride.objects.get(
                 id=ride_id,
                 driver=request.user,
-                status__in=[Ride.Status.ACCEPTED, Ride.Status.DRIVER_ARRIVING],
+                status__in=[Ride.Status.ACCEPTED, Ride.Status.DRIVER_ARRIVING, Ride.Status.DRIVER_ARRIVED],
             )
         except Ride.DoesNotExist:
             return Response(
@@ -296,11 +297,85 @@ class StartRideView(APIView):
         ride.started_at = timezone.now()
         ride.save(update_fields=["status", "started_at"])
 
+        _notify_passenger_ws(ride, "in_progress", {
+            "status": "in_progress",
+        })
+
         _send_ride_notification(
             ride.passenger,
             "Course démarrée",
             "Votre course est en cours.",
             {"ride_id": str(ride.id), "type": "ride_started"},
+        )
+
+        return Response(RideSerializer(ride).data)
+
+
+class DriverArrivedView(APIView):
+    """Driver notifies they have arrived at the pickup point."""
+
+    permission_classes = [permissions.IsAuthenticated, IsApprovedDriver]
+
+    def post(self, request, ride_id):
+        try:
+            ride = Ride.objects.get(
+                id=ride_id,
+                driver=request.user,
+                status__in=[Ride.Status.ACCEPTED, Ride.Status.DRIVER_ARRIVING],
+            )
+        except Ride.DoesNotExist:
+            return Response(
+                {"detail": "Course non trouvée."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        ride.status = Ride.Status.DRIVER_ARRIVED
+        ride.save(update_fields=["status"])
+
+        _notify_passenger_ws(ride, "driver_arrived", {
+            "status": "driver_arrived",
+        })
+
+        _send_ride_notification(
+            ride.passenger,
+            "Chauffeur arrivé",
+            "Votre chauffeur est arrivé au point de prise en charge.",
+            {"ride_id": str(ride.id), "type": "driver_arrived"},
+        )
+
+        return Response(RideSerializer(ride).data)
+
+
+class DriverArrivingView(APIView):
+    """Driver marks themselves as en route to pickup (accepted → driver_arriving)."""
+
+    permission_classes = [permissions.IsAuthenticated, IsApprovedDriver]
+
+    def post(self, request, ride_id):
+        try:
+            ride = Ride.objects.get(
+                id=ride_id,
+                driver=request.user,
+                status=Ride.Status.ACCEPTED,
+            )
+        except Ride.DoesNotExist:
+            return Response(
+                {"detail": "Course non trouvée."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        ride.status = Ride.Status.DRIVER_ARRIVING
+        ride.save(update_fields=["status"])
+
+        _notify_passenger_ws(ride, "driver_arriving", {
+            "status": "driver_arriving",
+        })
+
+        _send_ride_notification(
+            ride.passenger,
+            "Chauffeur en route",
+            "Votre chauffeur est en route vers vous.",
+            {"ride_id": str(ride.id), "type": "driver_arriving"},
         )
 
         return Response(RideSerializer(ride).data)
@@ -373,6 +448,11 @@ class CompleteRideView(APIView):
         profile.total_earnings += ride.driver_earnings
         profile.save(update_fields=["is_on_ride", "total_rides", "total_earnings"])
 
+        _notify_passenger_ws(ride, "completed", {
+            "status": "completed",
+            "final_price": str(ride.final_price),
+        })
+
         _send_ride_notification(
             ride.passenger,
             "Course terminée",
@@ -391,6 +471,7 @@ class CancelRideView(APIView):
             Ride.Status.REQUESTED,
             Ride.Status.ACCEPTED,
             Ride.Status.DRIVER_ARRIVING,
+            Ride.Status.DRIVER_ARRIVED,
         ]
         try:
             ride = Ride.objects.get(id=ride_id, status__in=cancellable)

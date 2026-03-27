@@ -16,7 +16,7 @@ from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
-PAWAPAY_API_URL = "https://api.pawapay.io"
+PAWAPAY_API_URL = getattr(settings, "PAWAPAY_API_URL", "https://api.sandbox.pawapay.io")
 TIMEOUT = 30
 
 
