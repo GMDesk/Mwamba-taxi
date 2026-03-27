@@ -53,5 +53,5 @@ class ApiConstants {
   static String driverReviews(String driverId) => '/reviews/driver/$driverId/';
 
   // Google Maps
-  static const String googleMapsApiKey = 'REDACTED_GOOGLE_API_KEY';
+  static const String googleMapsApiKey = String.fromEnvironment('GOOGLE_MAPS_API_KEY');
 }

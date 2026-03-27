@@ -2,7 +2,7 @@ class ApiConstants {
   ApiConstants._();
 
   // Google Maps / Places API
-  static const String googleMapsApiKey = 'REDACTED_GOOGLE_API_KEY';
+  static const String googleMapsApiKey = String.fromEnvironment('GOOGLE_MAPS_API_KEY');
 
   static const String baseUrl = 'https://mwambataxi.com/api/v1';
   // static const String baseUrl = 'http://192.168.18.10:8001/api/v1';  // Local
