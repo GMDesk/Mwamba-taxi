@@ -84,6 +84,23 @@ def cleanup_stale_rides():
         assigned_driver__isnull=True,
         requested_at__lt=cutoff,
     )
+    stale_rides = list(stale)
     count = stale.update(status=Ride.Status.NO_DRIVER)
     if count:
         logger.info("Cleaned up %d stale rides", count)
+        # Notify passengers that no driver was found
+        try:
+            from asgiref.sync import async_to_sync
+            from channels.layers import get_channel_layer
+            channel_layer = get_channel_layer()
+            for ride in stale_rides:
+                async_to_sync(channel_layer.group_send)(
+                    f"ride_{ride.id}",
+                    {
+                        "type": "status.update",
+                        "status": "no_driver",
+                        "message": "Aucun chauffeur disponible.",
+                    },
+                )
+        except Exception:
+            logger.exception("Failed to notify passengers of stale rides")

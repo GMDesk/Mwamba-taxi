@@ -523,6 +523,26 @@ class CancelRideView(APIView):
             if is_driver_cancel:
                 update_driver_stats_on_cancel(profile)
 
+        # Notify both parties via WebSocket
+        cancel_status = "cancelled_by_driver" if is_driver_cancel else "cancelled_by_passenger"
+        _notify_passenger_ws(ride, cancel_status, {
+            "ride_id": str(ride.id),
+            "message": "La course a été annulée.",
+        })
+        # Notify the driver via their personal WS channel
+        if ride.driver:
+            try:
+                channel_layer = get_channel_layer()
+                async_to_sync(channel_layer.group_send)(
+                    f"driver_{ride.driver.id}",
+                    {
+                        "type": "ride_cancelled",
+                        "ride_id": str(ride.id),
+                    },
+                )
+            except Exception:
+                logger.exception("Failed to notify driver of cancellation")
+
         return Response(RideSerializer(ride).data)
 
 
@@ -556,7 +576,7 @@ class ActiveRideView(APIView):
                     Ride.Status.IN_PROGRESS,
                 ],
             )
-            .order_by("-created_at")
+            .order_by("-requested_at")
             .first()
         )
         if ride is None:
