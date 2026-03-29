@@ -16,7 +16,8 @@ import '../../../../core/di/injection.dart';
 import '../../../../core/network/api_client.dart';
 import '../../../../core/services/route_service.dart';
 import '../../../../core/theme/app_colors.dart';
-import '../../../../core/utils/driver_car_icon.dart';
+import '../../../../core/utils/vehicle_painter.dart';
+import '../../../../core/utils/vehicle_animator.dart';
 import '../../../../core/widgets/app_alert.dart';
 
 // ─── Design tokens ───────────────────────────────────────────────────────────
@@ -87,6 +88,9 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
   late AnimationController _panelController;
   late Animation<Offset> _panelSlide;
 
+  // ── premium vehicle animator ──────────────────────────────────────────────
+  VehicleAnimator? _vehicleAnimator;
+
   // ─────────────────────────────────────────────── Lifecycle ──────────────────
   @override
   void initState() {
@@ -102,6 +106,10 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
 
     _loadMapStyle();
     _initCarIcon();
+    _vehicleAnimator = VehicleAnimator(
+      vsync: this,
+      onFrame: _onVehicleFrame,
+    );
     _loadRide();
     _startTracking();
     _connectWebSocket();
@@ -120,8 +128,40 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
   }
 
   Future<void> _initCarIcon() async {
-    final size = carSizeForZoom(_currentZoom);
-    _carIcon = await createDriverCarIcon(size: size, heading: _heading);
+    _carIcon = await getVehicleMarker(
+      heading: _heading,
+      zoom: _currentZoom,
+      state: _vehicleStateFromStatus(),
+      isDriverSelf: true,
+    );
+    if (mounted) setState(() {});
+  }
+
+  /// Map ride status → VehicleState for colour coding.
+  VehicleState _vehicleStateFromStatus() {
+    switch (_status) {
+      case 'accepted':
+      case 'driver_arriving':
+        return VehicleState.enRoute;
+      case 'driver_arrived':
+        return VehicleState.arrived;
+      case 'in_progress':
+        return VehicleState.inProgress;
+      default:
+        return VehicleState.available;
+    }
+  }
+
+  /// Called on every animation tick by the VehicleAnimator.
+  void _onVehicleFrame(LatLng position, double bearing) async {
+    _currentPosition = position;
+    _heading = bearing;
+    _carIcon = await getVehicleMarker(
+      heading: bearing,
+      zoom: _currentZoom,
+      state: _vehicleStateFromStatus(),
+      isDriverSelf: true,
+    );
     if (mounted) setState(() {});
   }
 
@@ -211,17 +251,9 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
       ),
     ).listen((pos) async {
       final newPos = LatLng(pos.latitude, pos.longitude);
-      final newHeading = pos.heading;
 
-      // Refresh car icon if heading changed significantly
-      if ((_heading - newHeading).abs() > 10) {
-        _heading = newHeading;
-        final size = carSizeForZoom(_currentZoom);
-        _carIcon = await createDriverCarIcon(size: size, heading: _heading);
-        _carIconCache.clear(); // heading changed, invalidate cache
-      }
-
-      setState(() => _currentPosition = newPos);
+      // Feed into the premium animator (handles smoothing + interpolation)
+      _vehicleAnimator?.pushPosition(newPos, bearing: pos.heading);
 
       // Follow driver in driving mode
       if (_drivingMode) {
@@ -230,7 +262,7 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
             target: newPos,
             zoom: 17,
             tilt: 55,
-            bearing: newHeading,
+            bearing: pos.heading,
           ),
         ));
       }
@@ -531,6 +563,7 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
   void dispose() {
     _disposed = true;
     _positionSub?.cancel();
+    _vehicleAnimator?.dispose();
     _ws?.sink.close();
     _heartbeatTimer?.cancel();
     _wsReconnectTimer?.cancel();
@@ -655,11 +688,15 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
           _lastZoomBucket = bucket;
           _zoomDebounce?.cancel();
           _zoomDebounce = Timer(const Duration(milliseconds: 200), () async {
-            final size = carSizeForZoom(_currentZoom);
             if (_carIconCache.containsKey(bucket)) {
               _carIcon = _carIconCache[bucket];
             } else {
-              final icon = await createDriverCarIcon(size: size, heading: _heading);
+              final icon = await getVehicleMarker(
+                heading: _heading,
+                zoom: _currentZoom,
+                state: _vehicleStateFromStatus(),
+                isDriverSelf: true,
+              );
               _carIconCache[bucket] = icon;
               _carIcon = icon;
             }

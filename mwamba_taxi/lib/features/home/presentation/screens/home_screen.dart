@@ -15,7 +15,7 @@ import '../../../../core/di/injection.dart';
 import '../../../../core/network/api_client.dart';
 import '../../../../core/services/places_service.dart';
 import '../../../../core/theme/app_colors.dart';
-import '../../../../core/utils/car_marker_icon.dart';
+import '../../../../core/utils/vehicle_painter.dart';
 import '../widgets/destination_search_sheet.dart';
 import '../widgets/ride_request_sheet.dart';
 
@@ -53,13 +53,11 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   // Vehicle categories mapping to backend
   static const _vehicleCategories = ['economy', 'comfort', 'moto', 'van'];
 
-  BitmapDescriptor _carIcon = BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen);
   Timer? _driverRefreshTimer;
 
   // Zoom-aware scaling
   double _currentZoom = 14;
   int _lastZoomBucket = 14;
-  final Map<int, BitmapDescriptor> _carIconCache = {};
   Timer? _zoomDebounce;
   List<LatLng> _routePoints = [];
 
@@ -108,17 +106,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   /// Loads the car marker icon at the appropriate size for the current zoom.
   Future<void> _createCarIcon() async {
-    final size = carSizeForZoom(_currentZoom);
-    final bucket = _currentZoom.round();
-    if (_carIconCache.containsKey(bucket)) {
-      _carIcon = _carIconCache[bucket]!;
-      _loadNearbyDrivers();
-      return;
-    }
-    final icon = await createCarMarkerIcon(size: size);
-    _carIconCache[bucket] = icon;
+    // Pre-warm the sprite cache for the current zoom
+    await getVehicleMarker(
+      heading: 0,
+      zoom: _currentZoom,
+      state: VehicleState.available,
+    );
     if (mounted) {
-      setState(() => _carIcon = icon);
       _loadNearbyDrivers();
     }
   }
@@ -296,24 +290,29 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       );
 
       final drivers = response.data as List;
-      final driverMarkers = drivers.map((d) {
+      final Set<Marker> driverMarkers = {};
+      for (final d in drivers) {
         final heading = double.tryParse(d['heading']?.toString() ?? '') ?? 0;
-        return Marker(
+        final icon = await getVehicleMarker(
+          heading: heading,
+          zoom: _currentZoom,
+          state: VehicleState.available,
+        );
+        driverMarkers.add(Marker(
           markerId: MarkerId('driver_${d['id']}'),
           position: LatLng(
             double.parse(d['latitude']),
             double.parse(d['longitude']),
           ),
-          icon: _carIcon,
-          rotation: heading,
+          icon: icon,
           anchor: const Offset(0.5, 0.5),
           flat: true,
           infoWindow: InfoWindow(
             title: d['driver_name'],
             snippet: '${d['vehicle_make']} ${d['vehicle_model']} ⭐${d['rating']}',
           ),
-        );
-      }).toSet();
+        ));
+      }
 
       setState(() {
         _markers.removeWhere((m) => m.markerId.value.startsWith('driver_'));

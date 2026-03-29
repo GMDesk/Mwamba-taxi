@@ -16,7 +16,8 @@ import '../../../../core/di/injection.dart';
 import '../../../../core/network/api_client.dart';
 import '../../../../core/services/places_service.dart';
 import '../../../../core/theme/app_colors.dart';
-import '../../../../core/utils/car_marker_icon.dart';
+import '../../../../core/utils/vehicle_painter.dart';
+import '../../../../core/utils/vehicle_animator.dart';
 
 class RideScreen extends StatefulWidget {
   final String rideId;
@@ -37,7 +38,6 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
   final Set<Marker> _markers = {};
   final Set<Polyline> _polylines = {};
   LatLng? _driverPosition;
-  LatLng? _driverTargetPosition; // smooth interpolation target
   double _driverHeading = 0;
   bool _isLoading = true;
 
@@ -47,15 +47,15 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
   int _assignmentTotalTimeout = 15;
   Timer? _assignmentTimer;
 
-  BitmapDescriptor _carIcon = BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange);
-
   // Zoom-aware scaling
   double _currentZoom = 14;
   int _lastZoomBucket = 14;
-  final Map<int, BitmapDescriptor> _carIconCache = {};
   Timer? _zoomDebounce;
   List<LatLng> _routePoints = [];
   List<LatLng> _driverRoutePoints = [];
+
+  // Premium vehicle animator
+  VehicleAnimator? _driverAnimator;
 
   // Searching animation
   late AnimationController _pulseController;
@@ -67,9 +67,6 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
 
   // Nearby drivers refresh
   Timer? _driverRefreshTimer;
-
-  // Smooth driver movement animation
-  late AnimationController _moveController;
 
   // Countdown for estimated wait
   int _estimatedWaitSeconds = 180; // 3 min default
@@ -106,10 +103,10 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
       CurvedAnimation(parent: _searchCarController, curve: Curves.linear),
     );
 
-    _moveController = AnimationController(
+    _driverAnimator = VehicleAnimator(
       vsync: this,
-      duration: const Duration(milliseconds: 600),
-    )..addListener(_interpolateDriverPosition);
+      onFrame: _onDriverFrame,
+    );
 
     _initCarIcon();
     _loadRide();
@@ -128,18 +125,30 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
   }
 
   Future<void> _initCarIcon() async {
-    final size = carSizeForZoom(_currentZoom);
-    final bucket = _currentZoom.round();
-    if (_carIconCache.containsKey(bucket)) {
-      _carIcon = _carIconCache[bucket]!;
-      _loadNearbyDrivers();
-      return;
-    }
-    final icon = await createCarMarkerIcon(size: size);
-    _carIconCache[bucket] = icon;
+    // Pre-warm the sprite cache for the current zoom + state
+    await getVehicleMarker(
+      heading: _driverHeading,
+      zoom: _currentZoom,
+      state: _vehicleStateFromRide(),
+    );
     if (mounted) {
-      setState(() => _carIcon = icon);
       _loadNearbyDrivers();
+    }
+  }
+
+  /// Map ride status → VehicleState for colour coding.
+  VehicleState _vehicleStateFromRide() {
+    final s = _ride?['status'];
+    switch (s) {
+      case 'accepted':
+      case 'driver_arriving':
+        return VehicleState.enRoute;
+      case 'driver_arrived':
+        return VehicleState.arrived;
+      case 'in_progress':
+        return VehicleState.inProgress;
+      default:
+        return VehicleState.available;
     }
   }
 
@@ -420,22 +429,13 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
             double.parse(data['latitude'].toString()),
             double.parse(data['longitude'].toString()),
           );
-          // Calculate heading from consecutive positions
-          if (_driverPosition != null) {
-            final dLat = newPos.latitude - _driverPosition!.latitude;
-            final dLng = newPos.longitude - _driverPosition!.longitude;
-            if (dLat.abs() > 0.00001 || dLng.abs() > 0.00001) {
-              _driverHeading = (math.atan2(dLng, dLat) * 180 / math.pi) % 360;
-            }
-          }
           // Use heading from server if provided
+          double? heading;
           if (data['heading'] != null) {
-            _driverHeading = double.tryParse(data['heading'].toString()) ?? _driverHeading;
+            heading = double.tryParse(data['heading'].toString());
           }
-          // Smooth interpolation: animate from current to new position
-          _driverTargetPosition = newPos;
-          _driverPosition ??= newPos;
-          _moveController.forward(from: 0);
+          // Feed into premium animator
+          _driverAnimator?.pushPosition(newPos, bearing: heading);
           // Recalculate ETA from driver to pickup
           _updateDriverEta(newPos);
           // Redraw driver-to-pickup route periodically
@@ -899,24 +899,29 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
         },
       );
       final drivers = response.data as List;
-      final driverMarkers = drivers.map((d) {
+      final Set<Marker> driverMarkers = {};
+      for (final d in drivers) {
         final heading = double.tryParse(d['heading']?.toString() ?? '') ?? 0;
-        return Marker(
+        final icon = await getVehicleMarker(
+          heading: heading,
+          zoom: _currentZoom,
+          state: VehicleState.available,
+        );
+        driverMarkers.add(Marker(
           markerId: MarkerId('driver_${d['id']}'),
           position: LatLng(
             double.parse(d['latitude'].toString()),
             double.parse(d['longitude'].toString()),
           ),
-          icon: _carIcon,
-          rotation: heading,
+          icon: icon,
           anchor: const Offset(0.5, 0.5),
           flat: true,
           infoWindow: InfoWindow(
             title: d['driver_name'],
             snippet: '${d['vehicle_make']} ${d['vehicle_model']} ⭐${d['rating']}',
           ),
-        );
-      }).toSet();
+        ));
+      }
 
       if (!mounted) return;
       setState(() {
@@ -994,34 +999,28 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
     setState(() {});
   }
 
-  /// Smoothly interpolates the driver position between old and target.
-  void _interpolateDriverPosition() {
-    if (_driverPosition == null || _driverTargetPosition == null) return;
-    final t = Curves.easeInOut.transform(_moveController.value);
-    final lat = _driverPosition!.latitude +
-        (_driverTargetPosition!.latitude - _driverPosition!.latitude) * t;
-    final lng = _driverPosition!.longitude +
-        (_driverTargetPosition!.longitude - _driverPosition!.longitude) * t;
+  /// Called on every animation frame by the VehicleAnimator.
+  void _onDriverFrame(LatLng position, double bearing) async {
+    _driverPosition = position;
+    _driverHeading = bearing;
 
-    // Update position for the marker at this interpolation step
-    final interpolated = LatLng(lat, lng);
+    final icon = await getVehicleMarker(
+      heading: bearing,
+      zoom: _currentZoom,
+      state: _vehicleStateFromRide(),
+    );
+
     _markers.removeWhere((m) => m.markerId.value == 'my_driver');
     _markers.add(Marker(
       markerId: const MarkerId('my_driver'),
-      position: interpolated,
-      icon: _carIcon,
-      rotation: _driverHeading,
+      position: position,
+      icon: icon,
       anchor: const Offset(0.5, 0.5),
       flat: true,
       infoWindow: const InfoWindow(title: 'Votre chauffeur'),
     ));
 
     if (mounted) setState(() {});
-
-    // When animation completes, snap to target
-    if (_moveController.isCompleted) {
-      _driverPosition = _driverTargetPosition;
-    }
   }
 
   Future<void> _cancelRide() async {
@@ -1160,7 +1159,7 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
     _wsReconnectTimer?.cancel();
     _pulseController.dispose();
     _searchCarController.dispose();
-    _moveController.dispose();
+    _driverAnimator?.dispose();
     _driverRefreshTimer?.cancel();
     _zoomDebounce?.cancel();
     _waitTimer?.cancel();
