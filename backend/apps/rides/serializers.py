@@ -20,11 +20,13 @@ class RideSerializer(serializers.ModelSerializer):
     driver = UserSerializer(read_only=True)
     assigned_driver_info = serializers.SerializerMethodField()
     driver_vehicle = serializers.SerializerMethodField()
+    driver_location = serializers.SerializerMethodField()
 
     class Meta:
         model = Ride
         fields = [
             "id", "passenger", "driver", "assigned_driver_info", "driver_vehicle",
+            "driver_location",
             "pickup_address", "pickup_latitude", "pickup_longitude",
             "destination_address", "destination_latitude", "destination_longitude",
             "distance_km", "estimated_duration_minutes",
@@ -59,6 +61,18 @@ class RideSerializer(serializers.ModelSerializer):
                 "color": p.vehicle_color,
                 "license_plate": p.license_plate,
             }
+        return None
+
+    def get_driver_location(self, obj):
+        """Return the driver's latest GPS position from their profile."""
+        user = obj.driver or obj.assigned_driver
+        if user and hasattr(user, "driver_profile"):
+            p = user.driver_profile
+            if p.current_latitude is not None and p.current_longitude is not None:
+                return {
+                    "latitude": float(p.current_latitude),
+                    "longitude": float(p.current_longitude),
+                }
         return None
 
 
