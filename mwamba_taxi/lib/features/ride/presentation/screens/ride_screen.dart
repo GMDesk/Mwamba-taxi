@@ -784,7 +784,11 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
   Future<void> _drawDriverToPickupRoute(LatLng driverPos) async {
     if (_ride == null) return;
     final status = _ride!['status'];
-    if (status != 'accepted' && status != 'driver_arriving') return;
+    // Show driver route for any pre-pickup state
+    if (status == 'in_progress' || status == 'completed' ||
+        status == 'cancelled_passenger' || status == 'cancelled_driver' ||
+        status == 'cancelled_by_passenger' || status == 'cancelled_by_driver' ||
+        status == 'no_driver') return;
 
     // Throttle: only redraw every 10 seconds
     final now = DateTime.now();
@@ -796,8 +800,12 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
       double.parse(_ride!['pickup_longitude'].toString()),
     );
 
-    final points = await _placesService.getRoutePolyline(driverPos, pickup);
-    if (!mounted || points.isEmpty) return;
+    var points = await _placesService.getRoutePolyline(driverPos, pickup);
+    if (!mounted) return;
+    // Fallback: draw straight line if Directions API returns empty
+    if (points.isEmpty) {
+      points = [driverPos, pickup];
+    }
 
     setState(() {
       _polylines.removeWhere((p) =>
@@ -835,7 +843,11 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
   void _updateDriverEta(LatLng driverPos) {
     if (_ride == null) return;
     final status = _ride!['status'];
-    if (status != 'accepted' && status != 'driver_arriving') {
+    // Show ETA for any pre-pickup state
+    if (status == 'in_progress' || status == 'completed' ||
+        status == 'cancelled_passenger' || status == 'cancelled_driver' ||
+        status == 'cancelled_by_passenger' || status == 'cancelled_by_driver' ||
+        status == 'no_driver' || status == 'driver_arrived') {
       if (_driverEtaMinutes != null) {
         setState(() {
           _driverEtaMinutes = null;

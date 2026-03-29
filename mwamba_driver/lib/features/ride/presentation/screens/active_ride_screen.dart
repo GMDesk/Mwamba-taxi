@@ -71,6 +71,10 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
   final Map<int, BitmapDescriptor> _carIconCache = {};
   Timer? _zoomDebounce;
 
+  // ── route refresh ──────────────────────────────────────────────────────────
+  Timer? _routeRefreshTimer;
+  DateTime _lastRouteRefresh = DateTime.fromMillisecondsSinceEpoch(0);
+
   // ── connections ────────────────────────────────────────────────────────────
   WebSocketChannel? _ws;
   StreamSubscription<Position>? _positionSub;
@@ -101,6 +105,13 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
     _loadRide();
     _startTracking();
     _connectWebSocket();
+
+    // Refresh route every 30 seconds while en route
+    _routeRefreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (_status == 'accepted' || _status == 'driver_arriving' || _status == 'in_progress') {
+        _fetchRoute();
+      }
+    });
   }
 
   Future<void> _loadMapStyle() async {
@@ -524,6 +535,7 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
     _heartbeatTimer?.cancel();
     _wsReconnectTimer?.cancel();
     _zoomDebounce?.cancel();
+    _routeRefreshTimer?.cancel();
     _mapController?.dispose();
     _panelController.dispose();
     super.dispose();
@@ -583,12 +595,13 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
       ));
     }
 
-    // Pickup marker
+    // Pickup / Passenger marker
     if (_pickupLatLng != null) {
       markers.add(Marker(
         markerId: const MarkerId('pickup'),
         position: _pickupLatLng!,
         icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+        infoWindow: InfoWindow(title: _rideData?['passenger']?['full_name'] ?? 'Client'),
         zIndex: 2,
       ));
     }
