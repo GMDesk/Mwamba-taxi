@@ -4,6 +4,30 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
+/// Returns the appropriate car icon pixel size for a given map [zoom] level.
+double carSizeForZoom(double zoom) {
+  if (zoom >= 19) return 100;
+  if (zoom >= 18) return 84;
+  if (zoom >= 17) return 68;
+  if (zoom >= 16) return 56;
+  if (zoom >= 15) return 44;
+  if (zoom >= 14) return 36;
+  if (zoom >= 13) return 30;
+  return 24;
+}
+
+/// Returns the polyline pixel width that visually matches the road at [zoom].
+int polylineWidthForZoom(double zoom) {
+  if (zoom >= 19) return 18;
+  if (zoom >= 18) return 14;
+  if (zoom >= 17) return 10;
+  if (zoom >= 16) return 7;
+  if (zoom >= 15) return 5;
+  if (zoom >= 14) return 4;
+  if (zoom >= 13) return 3;
+  return 2;
+}
+
 /// Generates a top-view car marker with an amber halo for the driver's own position.
 /// The car points UP by default; pass [heading] in degrees to rotate.
 Future<BitmapDescriptor> createDriverCarIcon({

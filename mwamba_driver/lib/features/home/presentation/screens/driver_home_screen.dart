@@ -14,6 +14,7 @@ import '../../../../core/constants/api_constants.dart';
 import '../../../../core/di/injection.dart';
 import '../../../../core/network/api_client.dart';
 import '../../../../core/services/driver_status_notifier.dart';
+import '../../../../core/services/ride_request_notifier.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/constants/app_strings.dart';
 import '../../../../core/widgets/app_alert.dart';
@@ -28,6 +29,7 @@ class DriverHomeScreen extends StatefulWidget {
 class _DriverHomeScreenState extends State<DriverHomeScreen> {
   final ApiClient _api = getIt<ApiClient>();
   final DriverStatusNotifier _statusNotifier = getIt<DriverStatusNotifier>();
+  final RideRequestNotifier _rideRequestNotifier = getIt<RideRequestNotifier>();
   GoogleMapController? _mapController;
   LatLng _currentPosition = const LatLng(-4.3250, 15.3222);
   bool get _isOnline => _statusNotifier.value;
@@ -162,10 +164,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
             _requestCountdown = timeout is int ? timeout : 15;
             _requestTotalTimeout = _requestCountdown;
           });
+          _rideRequestNotifier.value = rideData;
           _startRequestCountdown();
         } else if (msg['type'] == 'ride_cancelled' || msg['type'] == 'ride_reassigned') {
           _requestTimer?.cancel();
           setState(() => _pendingRequest = null);
+          _rideRequestNotifier.value = null;
         }
       },
       onDone: () {
@@ -191,9 +195,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     try {
       await _api.dio.post(ApiConstants.acceptRide(rideId));
       setState(() => _pendingRequest = null);
+      _rideRequestNotifier.value = null;
       if (mounted) context.go('/ride/$rideId');
     } on DioException catch (e) {
       setState(() => _pendingRequest = null);
+      _rideRequestNotifier.value = null;
       if (mounted) {
         AppAlert.showDioError(context, e,
           fallback: 'Cette course a d\u00e9j\u00e0 \u00e9t\u00e9 accept\u00e9e par un autre chauffeur.',
@@ -202,6 +208,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
       }
     } catch (e) {
       setState(() => _pendingRequest = null);
+      _rideRequestNotifier.value = null;
       if (mounted) {
         AppAlert.showError(context, e,
           fallback: 'Impossible d\'accepter la course.',
@@ -227,6 +234,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     final rideId = _pendingRequest?['id'];
     _requestTimer?.cancel();
     setState(() => _pendingRequest = null);
+    _rideRequestNotifier.value = null;
     if (rideId != null) {
       try {
         await _api.dio.post(ApiConstants.declineRide(rideId));

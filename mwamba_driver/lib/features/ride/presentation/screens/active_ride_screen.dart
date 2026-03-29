@@ -20,7 +20,8 @@ import '../../../../core/utils/driver_car_icon.dart';
 import '../../../../core/widgets/app_alert.dart';
 
 // ─── Design tokens ───────────────────────────────────────────────────────────
-const Color _kAmber = Color(0xFFD97706);
+const Color _kGoogleBlue = Color(0xFF4285F4);
+const Color _kGoogleBlueBorder = Color(0xFF1A73E8);
 const Color _kDarkBg = Color(0xFF0B0F19);
 const Color _kCardBg = Colors.white;
 const Color _kSecondaryBg = Color(0xFFF3F4F6);
@@ -64,6 +65,12 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
   // ── driving mode ───────────────────────────────────────────────────────────
   bool _drivingMode = false;
 
+  // ── zoom tracking ──────────────────────────────────────────────────────────
+  double _currentZoom = 14;
+  int _lastZoomBucket = 14;
+  final Map<int, BitmapDescriptor> _carIconCache = {};
+  Timer? _zoomDebounce;
+
   // ── connections ────────────────────────────────────────────────────────────
   WebSocketChannel? _ws;
   StreamSubscription<Position>? _positionSub;
@@ -102,7 +109,8 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
   }
 
   Future<void> _initCarIcon() async {
-    _carIcon = await createDriverCarIcon(size: 100, heading: _heading);
+    final size = carSizeForZoom(_currentZoom);
+    _carIcon = await createDriverCarIcon(size: size, heading: _heading);
     if (mounted) setState(() {});
   }
 
@@ -128,11 +136,6 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
       _panelController.forward();
       _fetchRoute();
       _fitBounds();
-
-      // Auto-transition to driver_arriving when first entering ride
-      if (_status == 'accepted') {
-        _markDriverArriving();
-      }
     } on DioException catch (e) {
       setState(() => _loading = false);
       if (mounted) {
@@ -202,7 +205,9 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
       // Refresh car icon if heading changed significantly
       if ((_heading - newHeading).abs() > 10) {
         _heading = newHeading;
-        _carIcon = await createDriverCarIcon(size: 100, heading: _heading);
+        final size = carSizeForZoom(_currentZoom);
+        _carIcon = await createDriverCarIcon(size: size, heading: _heading);
+        _carIconCache.clear(); // heading changed, invalidate cache
       }
 
       setState(() => _currentPosition = newPos);
@@ -267,7 +272,14 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
           final newStatus = msg['status'] ?? _status;
           if (mounted) {
             setState(() => _status = newStatus);
-            _fetchRoute();
+            if (newStatus == 'cancelled_by_passenger' || newStatus == 'cancelled') {
+              _positionSub?.cancel();
+              _showCancelledDialog();
+            } else if (newStatus == 'completed') {
+              _positionSub?.cancel();
+            } else {
+              _fetchRoute();
+            }
           }
         }
       },
@@ -279,7 +291,8 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
   void _scheduleReconnect() {
     if (_disposed) return;
     _heartbeatTimer?.cancel();
-    if (_status == 'completed' || _status == 'cancelled') return;
+    if (_status == 'completed' || _status == 'cancelled' ||
+        _status == 'cancelled_by_passenger' || _status == 'cancelled_by_driver') return;
 
     _wsReconnectAttempts++;
     final delaySec = [1, 2, 4, 8, 15][_wsReconnectAttempts.clamp(0, 4)];
@@ -336,6 +349,7 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
   Future<void> _completeRide() async {
     try {
       await _api.dio.post(ApiConstants.completeRide(widget.rideId));
+      _positionSub?.cancel();
       setState(() => _status = 'completed');
       if (mounted) {
         _showCompletedSheet();
@@ -396,6 +410,29 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
     }
   }
 
+  void _showCancelledDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(_kCardRadius),
+        ),
+        title: const Text('Course annulée'),
+        content: const Text('Le passager a annulé cette course.'),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              context.go('/home');
+            },
+            child: Text('OK', style: TextStyle(color: AppColors.primary)),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _recenterMap() {
     if (_drivingMode) {
       _mapController?.animateCamera(CameraUpdate.newCameraPosition(
@@ -428,7 +465,7 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
   }
 
   void _showCompletedSheet() {
-    final price = _rideData?['estimated_price'] ?? '—';
+    final price = _rideData?['final_fare'] ?? _rideData?['estimated_price'] ?? '—';
     showModalBottomSheet(
       context: context,
       isDismissible: false,
@@ -451,7 +488,7 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
                 style: TextStyle(fontSize: 20.sp, fontWeight: FontWeight.w700, color: _kTextDark)),
               SizedBox(height: 6.h),
               Text('$price CDF',
-                style: TextStyle(fontSize: 28.sp, fontWeight: FontWeight.w800, color: _kAmber)),
+                style: TextStyle(fontSize: 28.sp, fontWeight: FontWeight.w800, color: AppColors.primary)),
               SizedBox(height: 24.h),
               SizedBox(
                 width: double.infinity,
@@ -462,7 +499,7 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
                     context.go('/home');
                   },
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: _kAmber,
+                    backgroundColor: AppColors.primary,
                     foregroundColor: Colors.white,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(_kCardRadius.r),
@@ -486,6 +523,7 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
     _ws?.sink.close();
     _heartbeatTimer?.cancel();
     _wsReconnectTimer?.cancel();
+    _zoomDebounce?.cancel();
     _mapController?.dispose();
     _panelController.dispose();
     super.dispose();
@@ -498,7 +536,7 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
       return Scaffold(
         backgroundColor: _kDarkBg,
         body: const Center(
-          child: CircularProgressIndicator(color: _kAmber),
+          child: CircularProgressIndicator(color: AppColors.primary),
         ),
       );
     }
@@ -568,20 +606,21 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
     // Route polylines
     final polylines = <Polyline>{};
     if (_routePoints.isNotEmpty) {
-      // Shadow polyline
+      final pw = polylineWidthForZoom(_currentZoom);
+      // Border polyline
       polylines.add(Polyline(
-        polylineId: const PolylineId('route_shadow'),
+        polylineId: const PolylineId('route_border'),
         points: _routePoints,
-        color: Colors.black26,
-        width: 8,
+        color: _kGoogleBlueBorder,
+        width: pw + 2,
         zIndex: 0,
       ));
-      // Main amber route
+      // Main route
       polylines.add(Polyline(
         polylineId: const PolylineId('route_main'),
         points: _routePoints,
-        color: _kAmber,
-        width: 5,
+        color: _kGoogleBlue,
+        width: pw,
         zIndex: 1,
       ));
     }
@@ -595,6 +634,25 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
         _mapController = c;
         if (_mapStyle != null) c.setMapStyle(_mapStyle!);
         _fitBounds();
+      },
+      onCameraMove: (pos) {
+        _currentZoom = pos.zoom;
+        final bucket = pos.zoom.round();
+        if (bucket != _lastZoomBucket) {
+          _lastZoomBucket = bucket;
+          _zoomDebounce?.cancel();
+          _zoomDebounce = Timer(const Duration(milliseconds: 200), () async {
+            final size = carSizeForZoom(_currentZoom);
+            if (_carIconCache.containsKey(bucket)) {
+              _carIcon = _carIconCache[bucket];
+            } else {
+              final icon = await createDriverCarIcon(size: size, heading: _heading);
+              _carIconCache[bucket] = icon;
+              _carIcon = icon;
+            }
+            if (mounted) setState(() {});
+          });
+        }
       },
       markers: markers,
       polylines: polylines,
@@ -633,7 +691,7 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
                   width: 8.w,
                   height: 8.w,
                   decoration: BoxDecoration(
-                    color: _status == 'in_progress' ? AppColors.error : _kAmber,
+                    color: _status == 'in_progress' ? AppColors.error : AppColors.primary,
                     shape: BoxShape.circle,
                   ),
                 ),
@@ -677,7 +735,7 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
       child: Container(
         padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h),
         decoration: BoxDecoration(
-          color: _kAmber,
+          color: AppColors.primary,
           borderRadius: BorderRadius.circular(12.r),
           boxShadow: [
             BoxShadow(color: Colors.black.withOpacity(0.15), blurRadius: 8),
@@ -823,8 +881,8 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
       children: [
         CircleAvatar(
           radius: _drivingMode ? 18.r : 22.r,
-          backgroundColor: _kAmber.withOpacity(0.12),
-          child: Icon(Icons.person_rounded, color: _kAmber, size: _drivingMode ? 20.sp : 24.sp),
+          backgroundColor: AppColors.primary.withOpacity(0.12),
+          child: Icon(Icons.person_rounded, color: AppColors.primary, size: _drivingMode ? 20.sp : 24.sp),
         ),
         SizedBox(width: 10.w),
         Expanded(
@@ -847,14 +905,14 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
         Container(
           padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 4.h),
           decoration: BoxDecoration(
-            color: _kAmber.withOpacity(0.1),
+            color: AppColors.primary.withOpacity(0.1),
             borderRadius: BorderRadius.circular(8.r),
           ),
           child: Text('$price CDF',
             style: TextStyle(
               fontSize: _drivingMode ? 15.sp : 16.sp,
               fontWeight: FontWeight.w700,
-              color: _kAmber,
+              color: AppColors.primary,
             ),
           ),
         ),
@@ -872,7 +930,7 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
       child: Column(
         children: [
           _AddressRow(
-            dotColor: _kAmber,
+            dotColor: AppColors.primary,
             text: _rideData!['pickup_address'] ?? 'Prise en charge',
           ),
           Padding(
@@ -910,17 +968,17 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
       case 'driver_arrived':
         label = 'DÉMARRER LA COURSE';
         icon = Icons.play_arrow_rounded;
-        bg = _kAmber;
+        bg = AppColors.primary;
         break;
       case 'in_progress':
         label = 'TERMINER LA COURSE';
         icon = Icons.check_circle_rounded;
-        bg = _kAmber;
+        bg = AppColors.primary;
         break;
       case 'completed':
         label = 'RETOUR À L\'ACCUEIL';
         icon = Icons.home_rounded;
-        bg = _kAmber;
+        bg = AppColors.primary;
         break;
       default:
         return const SizedBox.shrink();
@@ -1010,7 +1068,7 @@ class _FloatingBtn extends StatelessWidget {
       child: Material(
         elevation: 3,
         shape: const CircleBorder(),
-        color: highlighted ? _kAmber : _kCardBg,
+        color: highlighted ? AppColors.primary : _kCardBg,
         child: InkWell(
           onTap: onTap,
           customBorder: const CircleBorder(),

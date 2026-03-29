@@ -245,7 +245,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                   gradient: state is AuthLoading
                                       ? null
                                       : const LinearGradient(
-                                          colors: [Color(0xFFB71C1C), Color(0xFFE53935)],
+                                          colors: [AppColors.primaryDark, AppColors.primary],
                                         ),
                                   color: state is AuthLoading ? Colors.grey.shade300 : null,
                                   borderRadius: BorderRadius.circular(18.r),
@@ -253,7 +253,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                       ? []
                                       : [
                                           BoxShadow(
-                                            color: const Color(0xFFB71C1C).withOpacity(0.35),
+                                            color: AppColors.primaryDark.withOpacity(0.35),
                                             blurRadius: 14,
                                             offset: const Offset(0, 5),
                                           ),

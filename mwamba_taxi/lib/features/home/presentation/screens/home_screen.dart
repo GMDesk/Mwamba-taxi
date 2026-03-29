@@ -26,7 +26,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
+class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   final Completer<GoogleMapController> _mapController = Completer();
   final ApiClient _api = getIt<ApiClient>();
   final PlacesService _placesService = PlacesService();
@@ -56,9 +56,19 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   BitmapDescriptor _carIcon = BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen);
   Timer? _driverRefreshTimer;
 
+  // Zoom-aware scaling
+  double _currentZoom = 14;
+  int _lastZoomBucket = 14;
+  final Map<int, BitmapDescriptor> _carIconCache = {};
+  Timer? _zoomDebounce;
+  List<LatLng> _routePoints = [];
+
   // CTA animation
   late AnimationController _ctaAnimController;
   late Animation<double> _ctaScaleAnim;
+
+  // Active ride
+  Map<String, dynamic>? _activeRide;
 
   @override
   void initState() {
@@ -72,6 +82,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     );
     _createCarIcon();
     _getCurrentLocation();
+    _checkActiveRide();
+    WidgetsBinding.instance.addObserver(this);
     _driverRefreshTimer = Timer.periodic(
       const Duration(seconds: 30),
       (_) => _loadNearbyDrivers(),
@@ -80,19 +92,79 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _driverRefreshTimer?.cancel();
+    _zoomDebounce?.cancel();
     _ctaAnimController.dispose();
     super.dispose();
   }
 
-  /// Loads the professional car marker icon.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkActiveRide();
+    }
+  }
+
+  /// Loads the car marker icon at the appropriate size for the current zoom.
   Future<void> _createCarIcon() async {
-    final icon = await createCarMarkerIcon();
+    final size = carSizeForZoom(_currentZoom);
+    final bucket = _currentZoom.round();
+    if (_carIconCache.containsKey(bucket)) {
+      _carIcon = _carIconCache[bucket]!;
+      _loadNearbyDrivers();
+      return;
+    }
+    final icon = await createCarMarkerIcon(size: size);
+    _carIconCache[bucket] = icon;
     if (mounted) {
       setState(() => _carIcon = icon);
-      // Reload markers with the new icon
       _loadNearbyDrivers();
     }
+  }
+
+  /// Called on every camera move — debounces zoom-based updates.
+  void _onCameraMove(CameraPosition pos) {
+    final bucket = pos.zoom.round();
+    _currentZoom = pos.zoom;
+    if (bucket != _lastZoomBucket) {
+      _lastZoomBucket = bucket;
+      _zoomDebounce?.cancel();
+      _zoomDebounce = Timer(const Duration(milliseconds: 250), () {
+        _createCarIcon();
+        if (_routePoints.isNotEmpty) _rebuildPolylines();
+      });
+    }
+  }
+
+  /// Rebuilds polylines at the width matching the current zoom level.
+  void _rebuildPolylines() {
+    final w = polylineWidthForZoom(_currentZoom);
+    setState(() {
+      _polylines.clear();
+      if (_routePoints.isNotEmpty) {
+        _polylines.add(Polyline(
+          polylineId: const PolylineId('route_border'),
+          points: _routePoints,
+          color: const Color(0xFF1A73E8),
+          width: w + 3,
+          startCap: Cap.roundCap,
+          endCap: Cap.roundCap,
+          jointType: JointType.round,
+          zIndex: 0,
+        ));
+        _polylines.add(Polyline(
+          polylineId: const PolylineId('route'),
+          points: _routePoints,
+          color: const Color(0xFF4285F4),
+          width: w,
+          startCap: Cap.roundCap,
+          endCap: Cap.roundCap,
+          jointType: JointType.round,
+          zIndex: 1,
+        ));
+      }
+    });
   }
 
   Future<void> _getCurrentLocation() async {
@@ -125,6 +197,19 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     }
   }
 
+  Future<void> _checkActiveRide() async {
+    try {
+      final resp = await _api.dio.get(ApiConstants.activeRide);
+      final data = resp.data as Map<String, dynamic>;
+      if (!mounted) return;
+      if (data['active'] == true) {
+        setState(() => _activeRide = data);
+      } else {
+        setState(() => _activeRide = null);
+      }
+    } catch (_) {}
+  }
+
   Future<void> _animateToPosition(LatLng position) async {
     final controller = await _mapController.future;
     controller.animateCamera(
@@ -143,25 +228,27 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
     setState(() {
       _isRouteLoading = false;
+      _routePoints = points;
       _polylines.clear();
       if (points.isNotEmpty) {
-        // Shadow polyline (underneath)
+        final w = polylineWidthForZoom(_currentZoom);
+        // Darker blue border (underneath)
         _polylines.add(Polyline(
           polylineId: const PolylineId('route_border'),
           points: points,
-          color: Colors.black26,
-          width: 9,
+          color: const Color(0xFF1A73E8),
+          width: w + 3,
           startCap: Cap.roundCap,
           endCap: Cap.roundCap,
           jointType: JointType.round,
           zIndex: 0,
         ));
-        // Amber route line (on top)
+        // Google blue route line (on top)
         _polylines.add(Polyline(
           polylineId: const PolylineId('route'),
           points: points,
-          color: const Color(0xFFD97706),
-          width: 6,
+          color: const Color(0xFF4285F4),
+          width: w,
           startCap: Cap.roundCap,
           endCap: Cap.roundCap,
           jointType: JointType.round,
@@ -295,8 +382,24 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         context.push('/ride/$rideId');
       }
     } on DioException catch (e) {
+      if (!mounted) return;
+      final msg = _extractErrorMessage(e) ?? 'Erreur lors de la commande';
+      // On any 400 error, check if there's an active ride and navigate to it
+      if (e.response?.statusCode == 400) {
+        try {
+          final resp = await _api.dio.get(ApiConstants.activeRide);
+          final data = resp.data as Map<String, dynamic>;
+          if (data['active'] == true) {
+            final rideId = data['id']?.toString() ?? '';
+            if (rideId.isNotEmpty && mounted) {
+              setState(() => _activeRide = data);
+              context.push('/ride/$rideId');
+              return;
+            }
+          }
+        } catch (_) {}
+      }
       if (mounted) {
-        final msg = _extractErrorMessage(e) ?? 'Erreur lors de la commande';
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(msg)),
         );
@@ -406,6 +509,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 final style = await rootBundle.loadString('assets/map_style.json');
                 controller.setMapStyle(style);
               },
+              onCameraMove: _onCameraMove,
               markers: _markers,
               polylines: _polylines,
               trafficEnabled: true,
@@ -565,6 +669,101 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     ],
                   ),
                   child: Icon(Icons.arrow_back_rounded, color: AppColors.dark, size: 22.sp),
+                ),
+              ),
+            ),
+
+          // ── Active ride banner ──
+          if (_activeRide != null)
+            Positioned(
+              top: MediaQuery.of(context).padding.top + (_destinationLocation == null ? 130.h : 8.h),
+              left: 20.w,
+              right: 20.w,
+              child: GestureDetector(
+                onTap: () {
+                  final rideId = _activeRide!['id']?.toString() ?? '';
+                  if (rideId.isNotEmpty) {
+                    context.push('/ride/$rideId');
+                  }
+                },
+                child: Container(
+                  padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 14.h),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(18.r),
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppColors.primaryDark.withOpacity(0.15),
+                        blurRadius: 16,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                    border: Border.all(
+                      color: AppColors.primary.withOpacity(0.3),
+                      width: 1.5,
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 44.w,
+                        height: 44.w,
+                        decoration: BoxDecoration(
+                          color: AppColors.primary.withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(14.r),
+                        ),
+                        child: Icon(
+                          Icons.local_taxi_rounded,
+                          color: AppColors.primary,
+                          size: 22.sp,
+                        ),
+                      ),
+                      SizedBox(width: 12.w),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Course en cours',
+                              style: GoogleFonts.poppins(
+                                fontSize: 14.sp,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.textPrimary,
+                              ),
+                            ),
+                            SizedBox(height: 2.h),
+                            Text(
+                              _activeRide!['destination_address'] ?? 'Voir les détails',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: GoogleFonts.poppins(
+                                fontSize: 12.sp,
+                                color: AppColors.textSecondary,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      SizedBox(width: 8.w),
+                      Container(
+                        padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 6.h),
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(
+                            colors: [AppColors.primaryDark, AppColors.primary],
+                          ),
+                          borderRadius: BorderRadius.circular(10.r),
+                        ),
+                        child: Text(
+                          'Voir',
+                          style: GoogleFonts.poppins(
+                            fontSize: 12.sp,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),

@@ -225,7 +225,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
               SizedBox(height: 20.h),
               SizedBox(
                 width: double.infinity,
-                height: 52.h,
+                height: 56.h,
                 child: ElevatedButton(
                   onPressed: depositing
                       ? null
@@ -272,7 +272,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.primary,
                     shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16.r)),
+                        borderRadius: BorderRadius.circular(18.r)),
                   ),
                   child: depositing
                       ? SizedBox(
@@ -282,7 +282,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                               color: Colors.white, strokeWidth: 2.5))
                       : Text('Recharger',
                           style: GoogleFonts.poppins(
-                              fontSize: 15.sp,
+                              fontSize: 16.sp,
                               fontWeight: FontWeight.w700,
                               color: Colors.white)),
                 ),
@@ -417,7 +417,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                               SizedBox(height: 20.h),
                               SizedBox(
                                 width: double.infinity,
-                                height: 48.h,
+                                height: 56.h,
                                 child: ElevatedButton.icon(
                                   onPressed: _showTopUpSheet,
                                   icon: Icon(Icons.add_rounded,
@@ -425,7 +425,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                                   label: Text(
                                     'Recharger',
                                     style: GoogleFonts.poppins(
-                                      fontSize: 14.sp,
+                                      fontSize: 16.sp,
                                       fontWeight: FontWeight.w700,
                                       color: Colors.white,
                                     ),
@@ -434,7 +434,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                                     backgroundColor: AppColors.primary,
                                     shape: RoundedRectangleBorder(
                                       borderRadius:
-                                          BorderRadius.circular(14.r),
+                                          BorderRadius.circular(18.r),
                                     ),
                                   ),
                                 ),

@@ -49,6 +49,14 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
 
   BitmapDescriptor _carIcon = BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange);
 
+  // Zoom-aware scaling
+  double _currentZoom = 14;
+  int _lastZoomBucket = 14;
+  final Map<int, BitmapDescriptor> _carIconCache = {};
+  Timer? _zoomDebounce;
+  List<LatLng> _routePoints = [];
+  List<LatLng> _driverRoutePoints = [];
+
   // Searching animation
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
@@ -120,12 +128,88 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
   }
 
   Future<void> _initCarIcon() async {
-    final icon = await createCarMarkerIcon();
+    final size = carSizeForZoom(_currentZoom);
+    final bucket = _currentZoom.round();
+    if (_carIconCache.containsKey(bucket)) {
+      _carIcon = _carIconCache[bucket]!;
+      _loadNearbyDrivers();
+      return;
+    }
+    final icon = await createCarMarkerIcon(size: size);
+    _carIconCache[bucket] = icon;
     if (mounted) {
       setState(() => _carIcon = icon);
-      // Reload markers with the new icon
       _loadNearbyDrivers();
     }
+  }
+
+  /// Called on every camera move — debounces zoom-based updates.
+  void _onCameraMove(CameraPosition pos) {
+    final bucket = pos.zoom.round();
+    _currentZoom = pos.zoom;
+    if (bucket != _lastZoomBucket) {
+      _lastZoomBucket = bucket;
+      _zoomDebounce?.cancel();
+      _zoomDebounce = Timer(const Duration(milliseconds: 250), () {
+        _initCarIcon();
+        if (_routePoints.isNotEmpty || _driverRoutePoints.isNotEmpty) {
+          _rebuildPolylines();
+        }
+      });
+    }
+  }
+
+  /// Rebuilds all polylines at the width matching the current zoom level.
+  void _rebuildPolylines() {
+    final w = polylineWidthForZoom(_currentZoom);
+    setState(() {
+      _polylines.clear();
+      if (_routePoints.isNotEmpty) {
+        _polylines.add(Polyline(
+          polylineId: const PolylineId('route_border'),
+          points: _routePoints,
+          color: const Color(0xFF1A73E8),
+          width: w + 3,
+          startCap: Cap.roundCap,
+          endCap: Cap.roundCap,
+          jointType: JointType.round,
+          zIndex: 0,
+        ));
+        _polylines.add(Polyline(
+          polylineId: const PolylineId('route'),
+          points: _routePoints,
+          color: const Color(0xFF4285F4),
+          width: w,
+          startCap: Cap.roundCap,
+          endCap: Cap.roundCap,
+          jointType: JointType.round,
+          zIndex: 1,
+        ));
+      }
+      if (_driverRoutePoints.isNotEmpty) {
+        _polylines.add(Polyline(
+          polylineId: const PolylineId('driver_route_border'),
+          points: _driverRoutePoints,
+          color: const Color(0xFF4285F4).withOpacity(0.25),
+          width: w,
+          startCap: Cap.roundCap,
+          endCap: Cap.roundCap,
+          jointType: JointType.round,
+          zIndex: 2,
+        ));
+        _polylines.add(Polyline(
+          polylineId: const PolylineId('driver_route'),
+          points: _driverRoutePoints,
+          color: const Color(0xFF4285F4),
+          width: (w * 0.7).round(),
+          startCap: Cap.roundCap,
+          endCap: Cap.roundCap,
+          jointType: JointType.round,
+          zIndex: 3,
+          patterns: [PatternItem.dash(20), PatternItem.gap(10)],
+        ));
+      }
+    });
   }
 
   Future<void> _loadRide() async {
@@ -177,6 +261,27 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
         duration: const Duration(seconds: 5),
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.r)),
+      ),
+    );
+  }
+
+  void _showCancellationNotification(String message) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Course annulée'),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              context.go('/home');
+            },
+            child: Text('OK', style: TextStyle(color: AppColors.primary)),
+          ),
+        ],
       ),
     );
   }
@@ -399,6 +504,17 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
               setState(() => _assignedDriver = null);
             }
             _loadRide();
+          } else if (wsStatus == 'cancelled_by_driver') {
+            // Driver cancelled the ride
+            _assignmentTimer?.cancel();
+            if (mounted) {
+              _showCancellationNotification('Le chauffeur a annulé la course.');
+            }
+          } else if (wsStatus == 'cancelled_by_passenger') {
+            // Passenger cancelled (confirmed by server)
+            if (mounted) {
+              context.go('/home');
+            }
           } else {
             _loadRide();
           }
@@ -414,8 +530,8 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
     _heartbeatTimer?.cancel();
     final status = _ride?['status'] ?? 'requested';
     // Don't reconnect if ride is in a terminal state
-    if (status == 'completed' || status == 'cancelled_passenger' ||
-        status == 'cancelled_driver' || status == 'no_driver') return;
+    if (status == 'completed' || status == 'cancelled_by_passenger' ||
+        status == 'cancelled_by_driver' || status == 'no_driver') return;
 
     _wsReconnectAttempts++;
     // Exponential backoff: 1s, 2s, 4s, 8s, max 15s
@@ -636,23 +752,25 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
       _polylines.removeWhere((p) =>
           p.polylineId.value == 'route_border' ||
           p.polylineId.value == 'route');
-      // Shadow border
+      _routePoints = points;
+      final w = polylineWidthForZoom(_currentZoom);
+      // Darker blue border
       _polylines.add(Polyline(
         polylineId: const PolylineId('route_border'),
         points: points,
-        color: Colors.black26,
-        width: 9,
+        color: const Color(0xFF1A73E8),
+        width: w + 3,
         startCap: Cap.roundCap,
         endCap: Cap.roundCap,
         jointType: JointType.round,
         zIndex: 0,
       ));
-      // Amber route
+      // Google blue route
       _polylines.add(Polyline(
         polylineId: const PolylineId('route'),
         points: points,
-        color: const Color(0xFFD97706),
-        width: 6,
+        color: const Color(0xFF4285F4),
+        width: w,
         startCap: Cap.roundCap,
         endCap: Cap.roundCap,
         jointType: JointType.round,
@@ -685,23 +803,25 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
       _polylines.removeWhere((p) =>
           p.polylineId.value == 'driver_route_border' ||
           p.polylineId.value == 'driver_route');
-      // Amber dashed-style border
+      _driverRoutePoints = points;
+      final w = polylineWidthForZoom(_currentZoom);
+      // Light blue border
       _polylines.add(Polyline(
         polylineId: const PolylineId('driver_route_border'),
         points: points,
-        color: const Color(0xFFD97706).withOpacity(0.25),
-        width: 7,
+        color: const Color(0xFF4285F4).withOpacity(0.25),
+        width: w,
         startCap: Cap.roundCap,
         endCap: Cap.roundCap,
         jointType: JointType.round,
         zIndex: 2,
       ));
-      // Amber route line
+      // Dashed blue route
       _polylines.add(Polyline(
         polylineId: const PolylineId('driver_route'),
         points: points,
-        color: const Color(0xFFD97706),
-        width: 4,
+        color: const Color(0xFF4285F4),
+        width: (w * 0.7).round(),
         startCap: Cap.roundCap,
         endCap: Cap.roundCap,
         jointType: JointType.round,
@@ -1030,6 +1150,7 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
     _searchCarController.dispose();
     _moveController.dispose();
     _driverRefreshTimer?.cancel();
+    _zoomDebounce?.cancel();
     _waitTimer?.cancel();
     _assignmentTimer?.cancel();
     super.dispose();
@@ -1064,6 +1185,7 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
               // Fit to route after map is created
               Future.delayed(const Duration(milliseconds: 500), _fitCameraToRoute);
             },
+            onCameraMove: _onCameraMove,
             markers: _markers,
             polylines: _polylines,
             trafficEnabled: true,

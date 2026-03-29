@@ -38,6 +38,7 @@ class ApiConstants {
   static String rideLocation(String id) => '/rides/$id/location/';
   static String rideSos(String id) => '/rides/$id/sos/';
   static const String passengerHistory = '/rides/history/passenger/';
+  static const String activeRide = '/rides/active/';
 
   // Payments / Wallet
   static const String wallet = '/payments/wallet/';

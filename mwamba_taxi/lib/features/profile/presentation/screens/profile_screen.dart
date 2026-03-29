@@ -328,7 +328,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             // Copy button
             SizedBox(
               width: double.infinity,
-              height: 50.h,
+              height: 56.h,
               child: OutlinedButton.icon(
                 onPressed: code.isNotEmpty
                     ? () {
@@ -349,7 +349,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       color: AppColors.primaryDark, width: 1.5),
                   foregroundColor: AppColors.primaryDark,
                   shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14.r),
+                    borderRadius: BorderRadius.circular(18.r),
                   ),
                 ),
               ),
@@ -689,7 +689,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               // Save button
               SizedBox(
                 width: double.infinity,
-                height: 50.h,
+                height: 56.h,
                 child: DecoratedBox(
                   decoration: BoxDecoration(
                     gradient: _saving
@@ -700,7 +700,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             end: Alignment.centerRight,
                           ),
                     color: _saving ? Colors.grey.shade300 : null,
-                    borderRadius: BorderRadius.circular(14.r),
+                    borderRadius: BorderRadius.circular(18.r),
                     boxShadow: _saving
                         ? []
                         : [
@@ -731,7 +731,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       foregroundColor: Colors.white,
                       shadowColor: Colors.transparent,
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14.r),
+                        borderRadius: BorderRadius.circular(18.r),
                       ),
                     ),
                   ),
@@ -853,7 +853,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       padding: EdgeInsets.fromLTRB(20.w, 24.h, 20.w, 0),
       child: SizedBox(
         width: double.infinity,
-        height: 52.h,
+        height: 56.h,
         child: OutlinedButton.icon(
           onPressed: _logout,
           icon: Icon(Icons.logout_rounded,
@@ -863,13 +863,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
             style: TextStyle(
               color: AppColors.error,
               fontWeight: FontWeight.w600,
-              fontSize: 15.sp,
+              fontSize: 16.sp,
             ),
           ),
           style: OutlinedButton.styleFrom(
             side: BorderSide(color: AppColors.error.withOpacity(0.4)),
             shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16.r),
+              borderRadius: BorderRadius.circular(18.r),
             ),
           ),
         ),

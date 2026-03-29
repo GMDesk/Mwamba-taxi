@@ -68,7 +68,7 @@ class AppTheme {
           minimumSize: Size(double.infinity, 56.h),
           elevation: 0,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16.r),
+            borderRadius: BorderRadius.circular(18.r),
           ),
           textStyle: GoogleFonts.poppins(
             fontSize: 16.sp,
@@ -82,7 +82,7 @@ class AppTheme {
           minimumSize: Size(double.infinity, 56.h),
           side: const BorderSide(color: AppColors.primary, width: 1.5),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16.r),
+            borderRadius: BorderRadius.circular(18.r),
           ),
           textStyle: GoogleFonts.poppins(
             fontSize: 16.sp,

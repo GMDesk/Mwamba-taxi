@@ -1,5 +1,4 @@
 ﻿import 'dart:async';
-import 'dart:convert';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -8,13 +7,13 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../../../../core/constants/api_constants.dart';
 import '../../../../core/constants/app_strings.dart';
 import '../../../../core/di/injection.dart';
 import '../../../../core/network/api_client.dart';
 import '../../../../core/services/driver_status_notifier.dart';
+import '../../../../core/services/ride_request_notifier.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/widgets/app_alert.dart';
 
@@ -29,10 +28,10 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen>
     with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   final ApiClient _api = getIt<ApiClient>();
   final DriverStatusNotifier _statusNotifier = getIt<DriverStatusNotifier>();
+  final RideRequestNotifier _rideRequestNotifier = getIt<RideRequestNotifier>();
   bool get _isOnline => _statusNotifier.value;
   bool _toggling = false;
-  WebSocketChannel? _ws;
-  Map<String, dynamic>? _pendingRequest;
+  Map<String, dynamic>? get _pendingRequest => _rideRequestNotifier.value;
 
   // Map
   GoogleMapController? _mapController;
@@ -54,6 +53,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _statusNotifier.addListener(_onStatusChanged);
+    _rideRequestNotifier.addListener(_onRideRequestChanged);
     _pulseController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 2),
@@ -73,13 +73,17 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen>
     if (mounted) setState(() {});
   }
 
+  void _onRideRequestChanged() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _statusNotifier.removeListener(_onStatusChanged);
+    _rideRequestNotifier.removeListener(_onRideRequestChanged);
     _pulseController.dispose();
     _positionSub?.cancel();
-    _disconnectWebSocket();
     _mapController?.dispose();
     super.dispose();
   }
@@ -149,7 +153,6 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen>
           _loadingStats = false;
         });
         if (_isOnline) {
-          _connectWebSocket();
           _startLocationUpdates();
         }
       }
@@ -182,10 +185,8 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen>
           'latitude': _currentPosition.latitude,
           'longitude': _currentPosition.longitude,
         }).ignore();
-        _connectWebSocket();
         _startLocationUpdates();
       } else {
-        _disconnectWebSocket();
         _stopLocationUpdates();
       }
     } on DioException catch (e) {
@@ -205,50 +206,13 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen>
     setState(() => _toggling = false);
   }
 
-  void _connectWebSocket() async {
-    final token = await _api.getAccessToken();
-    if (token == null) return;
-
-    try { _ws?.sink.close(); } catch (_) {}
-
-    _ws = WebSocketChannel.connect(
-      Uri.parse('${ApiConstants.wsBaseUrl}/driver/?token=$token'),
-    );
-    _ws!.stream.listen(
-      (data) {
-        final msg = jsonDecode(data);
-        if (msg['type'] == 'heartbeat_ack') return;
-        if (msg['type'] == 'ride_request') {
-          setState(() => _pendingRequest = msg['data']);
-        } else if (msg['type'] == 'ride_cancelled' || msg['type'] == 'ride_reassigned') {
-          setState(() => _pendingRequest = null);
-        }
-      },
-      onDone: () {
-        if (_isOnline && mounted) {
-          Future.delayed(const Duration(seconds: 3), _connectWebSocket);
-        }
-      },
-      onError: (_) {
-        if (_isOnline && mounted) {
-          Future.delayed(const Duration(seconds: 3), _connectWebSocket);
-        }
-      },
-    );
-  }
-
-  void _disconnectWebSocket() {
-    _ws?.sink.close();
-    _ws = null;
-  }
-
   Future<void> _acceptRide(String rideId) async {
     try {
       await _api.dio.post(ApiConstants.acceptRide(rideId));
-      setState(() => _pendingRequest = null);
+      _rideRequestNotifier.value = null;
       if (mounted) context.go('/ride/$rideId');
     } on DioException catch (e) {
-      setState(() => _pendingRequest = null);
+      _rideRequestNotifier.value = null;
       if (mounted) {
         AppAlert.showDioError(context, e,
           fallback: 'Cette course a d\u00e9j\u00e0 \u00e9t\u00e9 accept\u00e9e par un autre chauffeur.',
@@ -256,11 +220,19 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen>
         );
       }
     } catch (_) {
-      setState(() => _pendingRequest = null);
+      _rideRequestNotifier.value = null;
     }
   }
 
-  void _declineRide() => setState(() => _pendingRequest = null);
+  Future<void> _declineRide() async {
+    final rideId = _pendingRequest?['id'];
+    _rideRequestNotifier.value = null;
+    if (rideId != null) {
+      try {
+        await _api.dio.post(ApiConstants.declineRide(rideId));
+      } catch (_) {}
+    }
+  }
 
   @override
   Widget build(BuildContext context) {

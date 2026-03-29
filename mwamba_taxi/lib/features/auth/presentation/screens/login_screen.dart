@@ -73,76 +73,40 @@ class _LoginScreenState extends State<LoginScreen> {
           },
           child: Column(
             children: [
-              // ── Compact gradient header ──
+              // ── Flat header ──
               Container(
                 width: double.infinity,
                 padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top),
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
                     colors: [AppColors.primaryDark, AppColors.primary],
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                   ),
-                  borderRadius: const BorderRadius.only(
-                    bottomLeft: Radius.circular(32),
-                    bottomRight: Radius.circular(32),
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: AppColors.primaryDark.withOpacity(0.3),
-                      blurRadius: 20,
-                      offset: const Offset(0, 6),
-                    ),
-                  ],
                 ),
                 child: Padding(
-                  padding: EdgeInsets.fromLTRB(16.w, 8.h, 16.w, 24.h),
-                  child: Column(
+                  padding: EdgeInsets.fromLTRB(16.w, 8.h, 16.w, 16.h),
+                  child: Row(
                     children: [
-                      // Back button
-                      Row(
-                        children: [
-                          GestureDetector(
-                            onTap: () => context.pop(),
-                            child: Container(
-                              width: 40.w,
-                              height: 40.w,
-                              decoration: BoxDecoration(
-                                color: Colors.white.withOpacity(0.2),
-                                borderRadius: BorderRadius.circular(12.r),
-                              ),
-                              child: const Icon(Icons.arrow_back_ios_new, size: 17, color: Colors.white),
-                            ),
+                      GestureDetector(
+                        onTap: () => context.pop(),
+                        child: Container(
+                          width: 40.w,
+                          height: 40.w,
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.2),
+                            borderRadius: BorderRadius.circular(12.r),
                           ),
-                          const Spacer(),
-                          // Small logo
-                          Container(
-                            width: 40.w,
-                            height: 40.w,
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(12.r),
-                            ),
-                            padding: EdgeInsets.all(4.w),
-                            child: Image.asset('assets/images/logo.png', fit: BoxFit.contain),
-                          ),
-                        ],
-                      ),
-                      SizedBox(height: 16.h),
-                      Text(
-                        'Bon retour ! 👋',
-                        style: TextStyle(
-                          fontSize: 24.sp,
-                          fontWeight: FontWeight.w800,
-                          color: Colors.white,
+                          child: const Icon(Icons.arrow_back_ios_new, size: 17, color: Colors.white),
                         ),
                       ),
-                      SizedBox(height: 4.h),
+                      SizedBox(width: 14.w),
                       Text(
-                        'Connectez-vous pour continuer',
+                        'Connectez-vous',
                         style: TextStyle(
-                          fontSize: 14.sp,
-                          color: Colors.white.withOpacity(0.8),
+                          fontSize: 20.sp,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white,
                         ),
                       ),
                     ],
@@ -152,12 +116,13 @@ class _LoginScreenState extends State<LoginScreen> {
 
               // -- Form section --
               Expanded(
-                child: SingleChildScrollView(
-                  padding: EdgeInsets.fromLTRB(24.w, 32.h, 24.w, 24.h),
-                  child: Form(
-                    key: _formKey,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                child: Center(
+                  child: SingleChildScrollView(
+                    padding: EdgeInsets.fromLTRB(24.w, 24.h, 24.w, 24.h),
+                    child: Form(
+                      key: _formKey,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         // Phone
                         Text(
@@ -238,7 +203,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                   gradient: state is AuthLoading
                                       ? null
                                       : const LinearGradient(
-                                          colors: [Color(0xFFB71C1C), Color(0xFFE53935)],
+                                          colors: [AppColors.primaryDark, AppColors.primary],
                                         ),
                                   color: state is AuthLoading ? Colors.grey.shade300 : null,
                                   borderRadius: BorderRadius.circular(18.r),
@@ -246,7 +211,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                       ? []
                                       : [
                                           BoxShadow(
-                                            color: const Color(0xFFB71C1C).withOpacity(0.35),
+                                            color: AppColors.primaryDark.withOpacity(0.35),
                                             blurRadius: 14,
                                             offset: const Offset(0, 5),
                                           ),
@@ -339,6 +304,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       ],
                     ),
                   ),
+                ),
                 ),
               ),
             ],
