@@ -286,7 +286,12 @@ class DriverLocationView(APIView):
 
 
 class DriverStatusView(APIView):
-    """Toggle driver online/offline status."""
+    """Toggle driver online/offline status.
+
+    When going online, also check for pending rides nearby so the driver
+    can immediately receive a request without waiting for the next Celery
+    cycle.
+    """
 
     permission_classes = [permissions.IsAuthenticated, IsApprovedDriver]
 
@@ -296,8 +301,44 @@ class DriverStatusView(APIView):
         profile = request.user.driver_profile
         profile.is_online = serializer.validated_data["is_online"]
         profile.save(update_fields=["is_online"])
+
+        pending_ride_sent = False
+        if profile.is_online:
+            pending_ride_sent = self._check_pending_rides(profile)
+
         status_text = "en ligne" if profile.is_online else "hors ligne"
-        return Response({"message": f"Vous êtes maintenant {status_text}."})
+        return Response({
+            "message": f"Vous êtes maintenant {status_text}.",
+            "pending_ride_sent": pending_ride_sent,
+        })
+
+    @staticmethod
+    def _check_pending_rides(profile):
+        """Look for REQUESTED rides nearby with no assigned driver and assign
+        this driver if they score well enough."""
+        from apps.rides.models import Ride
+        from apps.rides.views import _auto_assign_nearest_driver
+
+        if not profile.current_latitude or not profile.current_longitude:
+            return False
+
+        # Find rides waiting for a driver with no current assignment
+        pending = Ride.objects.filter(
+            status=Ride.Status.REQUESTED,
+            assigned_driver__isnull=True,
+        ).order_by("requested_at")
+
+        for ride in pending[:5]:  # Check up to 5 oldest pending rides
+            declined = ride.declined_driver_ids or []
+            if profile.user_id in declined:
+                continue
+            # Re-run assignment — our driver might be the best candidate
+            _auto_assign_nearest_driver(ride)
+            # If this driver was assigned, we're done
+            ride.refresh_from_db()
+            if ride.assigned_driver_id == profile.user_id:
+                return True
+        return False
 
 
 class NearbyDriversView(APIView):

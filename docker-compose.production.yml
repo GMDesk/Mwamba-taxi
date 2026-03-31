@@ -1,38 +1,131 @@
-# Surcharge de production — utiliser avec:
-# docker compose -f docker-compose.yml -f docker-compose.production.yml up -d
+# =============================================================================
+# Mwamba Taxi — Docker Compose PRODUCTION
+# Usage: docker compose -f docker-compose.yml -f docker-compose.production.yml up -d
+#
+# Architecture: Nginx (SSL) → Daphne (ASGI) + Celery + PostgreSQL + Redis
+# Domaine: mwambataxi.com | IP: 34.62.184.191
+# =============================================================================
 
 services:
+
+  # ─── PostgreSQL : pas d'accès externe ──────────────────────────────
   db:
-    # Ne pas exposer le port PostgreSQL sur Internet
     ports: []
+    environment:
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
+  # ─── Redis : pas d'accès externe, AOF pour persistance ────────────
   redis:
-    # Ne pas exposer le port Redis sur Internet
     ports: []
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
+  # ─── Backend Django/Daphne : derrière Nginx ───────────────────────
   backend:
-    # En production l'image est déjà construite — pas de build à chaud
     env_file:
       - ./backend/.env.production
-    ports: []  # Nginx fait le proxy, pas besoin d'exposer 8000
+    environment:
+      - DATABASE_URL=postgres://mwamba:${DB_PASSWORD}@db:5432/mwamba_taxi
+      - REDIS_URL=redis://redis:6379/0
+    ports: []
+    expose:
+      - "8000"
+    volumes:
+      - static_files:/app/staticfiles
+      - media_files:/app/media
+      - ./backend/firebase-key.json:/app/firebase-key.json:ro
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
 
+  # ─── Celery Worker ────────────────────────────────────────────────
   celery_worker:
     env_file:
       - ./backend/.env.production
+    environment:
+      - DATABASE_URL=postgres://mwamba:${DB_PASSWORD}@db:5432/mwamba_taxi
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./backend/firebase-key.json:/app/firebase-key.json:ro
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
 
+  # ─── Celery Beat ──────────────────────────────────────────────────
   celery_beat:
     env_file:
       - ./backend/.env.production
+    environment:
+      - DATABASE_URL=postgres://mwamba:${DB_PASSWORD}@db:5432/mwamba_taxi
+      - REDIS_URL=redis://redis:6379/0
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
+  # ─── Nginx : SSL + Reverse Proxy + WebSocket ─────────────────────
   nginx:
+    image: nginx:1.25-alpine
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      - static_files:/var/www/static:ro
-      - media_files:/var/www/media:ro
+      - static_files:/app/staticfiles:ro
+      - media_files:/app/media:ro
       # Certificats Let's Encrypt
       - /etc/letsencrypt:/etc/letsencrypt:ro
-      # Dossier webroot pour le renouvellement certbot
       - certbot_www:/var/www/certbot:ro
+    depends_on:
+      - backend
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ─── Certbot : renouvellement automatique SSL ────────────────────
+  certbot:
+    image: certbot/certbot:latest
+    volumes:
+      - /etc/letsencrypt:/etc/letsencrypt
+      - certbot_www:/var/www/certbot
+    # Renouvelle toutes les 12h (ne fait rien si le cert est encore valide)
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 43200; done'"
+    depends_on:
+      - nginx
 
 volumes:
+  redis_data:
+  static_files:
+  media_files:
   certbot_www:

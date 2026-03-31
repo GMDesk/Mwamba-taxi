@@ -31,6 +31,9 @@ class DriverConsumer(AsyncWebsocketConsumer):
         await self.accept()
         logger.info("Driver WS connected: %s", user.id)
 
+        # Check for pending rides that may need this driver
+        await self._check_pending_rides()
+
     async def disconnect(self, close_code):
         if hasattr(self, "driver_group"):
             await self.channel_layer.group_discard(self.driver_group, self.channel_name)
@@ -93,6 +96,34 @@ class DriverConsumer(AsyncWebsocketConsumer):
             current_longitude=lng,
             last_location_update=timezone.now(),
         )
+
+    @database_sync_to_async
+    def _check_pending_rides(self):
+        """When driver connects via WebSocket, check if there are REQUESTED rides
+        nearby without an assigned driver and trigger assignment."""
+        from apps.accounts.models import DriverProfile
+        try:
+            profile = DriverProfile.objects.get(user=self.user)
+        except DriverProfile.DoesNotExist:
+            return
+        if not profile.is_online or profile.is_on_ride:
+            return
+        if not profile.current_latitude or not profile.current_longitude:
+            return
+        from .models import Ride
+        from .views import _auto_assign_nearest_driver
+        pending = Ride.objects.filter(
+            status=Ride.Status.REQUESTED,
+            assigned_driver__isnull=True,
+        ).order_by("requested_at")[:5]
+        for ride in pending:
+            declined = ride.declined_driver_ids or []
+            if self.user.id in declined:
+                continue
+            _auto_assign_nearest_driver(ride)
+            ride.refresh_from_db()
+            if ride.assigned_driver_id == self.user.id:
+                break  # We got assigned — signal was already sent via channel
 
 
 class RideTrackingConsumer(AsyncWebsocketConsumer):

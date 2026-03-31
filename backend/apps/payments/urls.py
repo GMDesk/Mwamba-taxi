@@ -23,4 +23,7 @@ urlpatterns = [
     path("earnings/", views.DriverEarningsView.as_view(), name="driver-earnings"),
     path("payout/request/", views.DriverPayoutRequestView.as_view(), name="driver-payout-request"),
     path("payouts/", views.DriverPayoutHistoryView.as_view(), name="driver-payouts"),
+
+    # Admin — PawaPay health check
+    path("pawapay/active-correspondents/", views.PawapayActiveCorrespondentsView.as_view(), name="pawapay-active-correspondents"),
 ]

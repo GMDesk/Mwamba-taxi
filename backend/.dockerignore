@@ -1,4 +1,5 @@
 venv/
+.venv/
 __pycache__/
 *.pyc
 *.pyo
@@ -8,9 +9,20 @@ __pycache__/
 *.sqlite3
 .env
 .env.local
+.env.production
 *.log
 media/
 staticfiles/
 .git/
 .gitignore
+.github/
+Dockerfile
+docker-compose*.yml
+nginx/
+backups/
+*.md
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
 *.md

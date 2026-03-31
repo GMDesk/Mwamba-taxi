@@ -418,3 +418,32 @@ class DriverPayoutHistoryView(generics.ListAPIView):
 
     def get_queryset(self):
         return DriverPayout.objects.filter(driver=self.request.user)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# ADMIN / HEALTH CHECK
+# ═══════════════════════════════════════════════════════════════════════
+
+class PawapayActiveCorrespondentsView(APIView):
+    """Check which PawaPay correspondents are active (admin only)."""
+
+    permission_classes = [permissions.IsAdminUser]
+
+    def get(self, request):
+        result = pawapay.get_active_correspondents()
+        expected = {"VODACOM_CD", "AIRTEL_CD", "ORANGE_CD"}
+        active_ids = set()
+        for c in result.get("correspondents", []):
+            if isinstance(c, dict):
+                active_ids.add(c.get("correspondent", ""))
+            elif isinstance(c, str):
+                active_ids.add(c)
+
+        missing = expected - active_ids
+        return Response({
+            "pawapay_reachable": result["success"],
+            "active_correspondents": result["correspondents"],
+            "expected": list(expected),
+            "missing": list(missing) if missing else [],
+            "all_live": result["success"] and not missing,
+        })

@@ -1,3 +1,8 @@
+# =============================================================================
+# Mwamba Taxi — Docker Compose (développement local)
+# Usage: docker compose up -d
+# =============================================================================
+
 services:
   db:
     image: postgres:16-alpine
@@ -75,19 +80,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-
-  nginx:
-    image: nginx:alpine
-    restart: always
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      - static_files:/var/www/static:ro
-      - media_files:/var/www/media:ro
-    depends_on:
-      - backend
 
 volumes:
   postgres_data:
