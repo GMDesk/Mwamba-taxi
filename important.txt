@@ -1,7 +1,0 @@
-gcloud compute ssh api-mwamba-taxti --zone europe-west1-b
-
-
-eyJraWQiOiIxIiwiYWxnIjoiRVMyNTYifQ.eyJ0dCI6IkFBVCIsInN1YiI6IjcxMSIsIm1hdiI6IjEiLCJleHAiOjIwOTAxMDk0NDcsImlhdCI6MTc3NDQ5MDI0NywicG0iOiJEQUYsUEFGIiwianRpIjoiYjI1YjRhYTAtNjg3OC00N2Q3LWI1OWMtYzFlZTQwMWE4ZmVmIn0.MmfIMJPd43MvwYBgNRzwCdg414WHPWexW4QEFPGSc0jt__PEYck-ZIjPYz4nBa4m0wbajDE4tWeJAc3uTjeNlg
-
-api : 
-AIzaSyBP64dDw1XZhbqvjEPJtrU-Ksa3HpmoSZ4
