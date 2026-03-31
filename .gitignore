@@ -28,6 +28,9 @@ mobile/mwamba_driver/build/
 *.iml
 *.log
 
+# Confidential
+important.txt
+
 # OS
 .DS_Store
 Thumbs.db
