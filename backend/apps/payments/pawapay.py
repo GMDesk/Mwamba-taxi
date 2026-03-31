@@ -35,9 +35,9 @@ def _headers() -> dict:
 # Orange Money:      80, 84, 85, 89, 86, 87, 88
 #
 # PawaPay active correspondents for DRC:
-#   - VODACOM_CD  (deposits + payouts)
-#   - AIRTEL_CD   (deposits + payouts)
-#   - ORANGE_CD   (deposits + payouts)
+#   - VODACOM_MPESA_COD  (deposits + payouts)
+#   - AIRTEL_COD          (deposits + payouts)
+#   - ORANGE_COD          (deposits + payouts)
 # ───────────────────────────────────────────────────────────────────────
 
 VODACOM_PREFIXES = ("81", "82", "83")
@@ -45,9 +45,9 @@ AIRTEL_PREFIXES  = ("97", "98", "99", "96", "95", "94")
 ORANGE_PREFIXES  = ("80", "84", "85", "86", "87", "88", "89")
 
 CORRESPONDENT_MAP = {
-    "VODACOM_CD": VODACOM_PREFIXES,
-    "AIRTEL_CD":  AIRTEL_PREFIXES,
-    "ORANGE_CD":  ORANGE_PREFIXES,
+    "VODACOM_MPESA_COD": VODACOM_PREFIXES,
+    "AIRTEL_COD":        AIRTEL_PREFIXES,
+    "ORANGE_COD":        ORANGE_PREFIXES,
 }
 
 
@@ -62,11 +62,11 @@ def _correspondent(phone: str) -> str:
 
     suffix = clean[3:5]
     if suffix in VODACOM_PREFIXES:
-        return "VODACOM_CD"
+        return "VODACOM_MPESA_COD"
     if suffix in AIRTEL_PREFIXES:
-        return "AIRTEL_CD"
+        return "AIRTEL_COD"
     if suffix in ORANGE_PREFIXES:
-        return "ORANGE_CD"
+        return "ORANGE_COD"
     raise ValueError(f"Opérateur non reconnu pour le préfixe +243{suffix}")
 
 
@@ -76,7 +76,7 @@ def get_operator_name(phone: str) -> str:
         corr = _correspondent(phone)
     except ValueError:
         return "Inconnu"
-    return {"VODACOM_CD": "Vodacom M-Pesa", "AIRTEL_CD": "Airtel Money", "ORANGE_CD": "Orange Money"}.get(corr, "Inconnu")
+    return {"VODACOM_MPESA_COD": "Vodacom M-Pesa", "AIRTEL_COD": "Airtel Money", "ORANGE_COD": "Orange Money"}.get(corr, "Inconnu")
 
 
 # ───────────────────────── DEPOSIT (Top-up wallet) ─────────────────────
