@@ -47,6 +47,8 @@ class _SplashScreenState extends State<SplashScreen>
       final state = context.read<AuthBloc>().state;
       if (state is AuthAuthenticated) {
         context.go('/home');
+      } else if (state is AuthSessionExpiredState) {
+        context.go('/welcome');
       } else {
         context.go('/welcome');
       }

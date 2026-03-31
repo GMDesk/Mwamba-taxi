@@ -1,5 +1,7 @@
 import 'package:go_router/go_router.dart';
 
+import '../di/injection.dart';
+import '../network/api_client.dart';
 import '../../features/auth/presentation/screens/login_screen.dart';
 import '../../features/auth/presentation/screens/register_screen.dart';
 import '../../features/auth/presentation/screens/otp_screen.dart';
@@ -11,6 +13,12 @@ import '../../features/history/presentation/screens/driver_history_screen.dart';
 
 final appRouter = GoRouter(
   initialLocation: '/',
+  redirect: (context, state) async {
+    const publicPaths = {'/', '/welcome', '/login', '/register', '/otp'};
+    if (publicPaths.contains(state.matchedLocation)) return null;
+    final valid = await getIt<ApiClient>().isSessionValid();
+    return valid ? null : '/welcome';
+  },
   routes: [
     GoRoute(
       path: '/',

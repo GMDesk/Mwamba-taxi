@@ -36,12 +36,39 @@ class RouteService {
       final encodedPolyline =
           route['overview_polyline']['points'] as String;
 
+      // Parse turn-by-turn navigation steps
+      final rawSteps = leg['steps'] as List<dynamic>? ?? [];
+      final navSteps = <NavigationStep>[];
+      for (final s in rawSteps) {
+        final step = s as Map<String, dynamic>;
+        final startLoc = step['start_location'] as Map<String, dynamic>;
+        final endLoc = step['end_location'] as Map<String, dynamic>;
+        final instruction = (step['html_instructions'] as String? ?? '')
+            .replaceAll(RegExp(r'<[^>]+>'), ''); // strip HTML tags
+        navSteps.add(NavigationStep(
+          instruction: instruction,
+          maneuver: step['maneuver'] as String? ?? '',
+          distanceText: (step['distance'] as Map<String, dynamic>?)?['text'] as String? ?? '',
+          distanceMeters: (step['distance'] as Map<String, dynamic>?)?['value'] as int? ?? 0,
+          durationText: (step['duration'] as Map<String, dynamic>?)?['text'] as String? ?? '',
+          startLocation: LatLng(
+            (startLoc['lat'] as num).toDouble(),
+            (startLoc['lng'] as num).toDouble(),
+          ),
+          endLocation: LatLng(
+            (endLoc['lat'] as num).toDouble(),
+            (endLoc['lng'] as num).toDouble(),
+          ),
+        ));
+      }
+
       return RouteResult(
         points: _decodePolyline(encodedPolyline),
         durationText: leg['duration']['text'] as String,
         durationSeconds: leg['duration']['value'] as int,
         distanceText: leg['distance']['text'] as String,
         distanceMeters: leg['distance']['value'] as int,
+        steps: navSteps,
       );
     } catch (_) {
       return null;
@@ -81,12 +108,34 @@ class RouteService {
   }
 }
 
+/// A single turn-by-turn navigation step.
+class NavigationStep {
+  final String instruction;
+  final String maneuver;
+  final String distanceText;
+  final int distanceMeters;
+  final String durationText;
+  final LatLng startLocation;
+  final LatLng endLocation;
+
+  const NavigationStep({
+    required this.instruction,
+    required this.maneuver,
+    required this.distanceText,
+    required this.distanceMeters,
+    required this.durationText,
+    required this.startLocation,
+    required this.endLocation,
+  });
+}
+
 class RouteResult {
   final List<LatLng> points;
   final String durationText;
   final int durationSeconds;
   final String distanceText;
   final int distanceMeters;
+  final List<NavigationStep> steps;
 
   const RouteResult({
     required this.points,
@@ -94,5 +143,6 @@ class RouteResult {
     required this.durationSeconds,
     required this.distanceText,
     required this.distanceMeters,
+    this.steps = const [],
   });
 }

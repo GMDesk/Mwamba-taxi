@@ -15,7 +15,7 @@ import '../../../../core/di/injection.dart';
 import '../../../../core/network/api_client.dart';
 import '../../../../core/services/places_service.dart';
 import '../../../../core/theme/app_colors.dart';
-import '../../../../core/utils/vehicle_painter.dart';
+import '../../../../core/utils/vehicle_asset_marker.dart';
 import '../widgets/destination_search_sheet.dart';
 import '../widgets/ride_request_sheet.dart';
 
@@ -67,6 +67,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   // Active ride
   Map<String, dynamic>? _activeRide;
+
+  // Route ETA from Directions API
+  int _routeDurationMinutes = 0;
+
+  // Driver comment (Yango-style)
+  String _driverComment = '';
 
   @override
   void initState() {
@@ -140,7 +146,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         _polylines.add(Polyline(
           polylineId: const PolylineId('route_border'),
           points: _routePoints,
-          color: const Color(0xFF1A73E8),
+          color: const Color(0xFF0D904F),
           width: w + 3,
           startCap: Cap.roundCap,
           endCap: Cap.roundCap,
@@ -150,7 +156,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         _polylines.add(Polyline(
           polylineId: const PolylineId('route'),
           points: _routePoints,
-          color: const Color(0xFF4285F4),
+          color: const Color(0xFF00C853),
           width: w,
           startCap: Cap.roundCap,
           endCap: Cap.roundCap,
@@ -181,6 +187,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             _pickupAddress = AppStrings.myLocation;
           });
           _animateToPosition(_currentPosition);
+          // Resolve real address in background
+          _placesService.reverseGeocode(_currentPosition).then((addr) {
+            if (addr != null && mounted) {
+              setState(() => _pickupAddress = addr);
+            }
+          });
         }
       }
     } catch (e) {
@@ -217,31 +229,32 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   /// Also fits the camera to show both endpoints.
   Future<void> _drawRoute(LatLng origin, LatLng destination) async {
     setState(() => _isRouteLoading = true);
-    final points = await _placesService.getRoutePolyline(origin, destination);
+    final result = await _placesService.getRoutePolyline(origin, destination);
     if (!mounted) return;
 
     setState(() {
       _isRouteLoading = false;
-      _routePoints = points;
+      _routePoints = result.points;
+      _routeDurationMinutes = (result.durationSeconds / 60).ceil();
       _polylines.clear();
-      if (points.isNotEmpty) {
+      if (result.points.isNotEmpty) {
         final w = polylineWidthForZoom(_currentZoom);
-        // Darker blue border (underneath)
+        // Darker green border (underneath) — Yango style
         _polylines.add(Polyline(
           polylineId: const PolylineId('route_border'),
-          points: points,
-          color: const Color(0xFF1A73E8),
+          points: result.points,
+          color: const Color(0xFF0D904F),
           width: w + 3,
           startCap: Cap.roundCap,
           endCap: Cap.roundCap,
           jointType: JointType.round,
           zIndex: 0,
         ));
-        // Google blue route line (on top)
+        // Bright green route line (on top) — Yango style
         _polylines.add(Polyline(
           polylineId: const PolylineId('route'),
-          points: points,
-          color: const Color(0xFF4285F4),
+          points: result.points,
+          color: const Color(0xFF00C853),
           width: w,
           startCap: Cap.roundCap,
           endCap: Cap.roundCap,
@@ -491,6 +504,180 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     );
   }
 
+  String _categoryPrice(double multiplier) {
+    if (_priceEstimate == null) return '';
+    final base = (_priceEstimate!['estimated_price'] as num).toDouble();
+    final price = (base * multiplier).round();
+    return '$price CDF';
+  }
+
+  String _arrivalTimeString() {
+    final arrival = DateTime.now().add(Duration(minutes: _routeDurationMinutes));
+    return '${arrival.hour.toString().padLeft(2, '0')}:${arrival.minute.toString().padLeft(2, '0')}';
+  }
+
+  void _showDriverCommentSheet() {
+    final controller = TextEditingController(text: _driverComment);
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+        child: Container(
+          decoration: BoxDecoration(
+            color: AppColors.dark,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20.r)),
+          ),
+          padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 16.h),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 36.w, height: 4.h,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.3),
+                    borderRadius: BorderRadius.circular(2.r),
+                  ),
+                ),
+              ),
+              SizedBox(height: 16.h),
+              Text(
+                'Commentaires pour le conducteur',
+                style: GoogleFonts.poppins(
+                  fontSize: 16.sp, fontWeight: FontWeight.w600,
+                  color: Colors.white,
+                ),
+              ),
+              SizedBox(height: 12.h),
+              TextField(
+                controller: controller,
+                maxLines: 3,
+                style: GoogleFonts.poppins(fontSize: 14.sp, color: Colors.white),
+                decoration: InputDecoration(
+                  hintText: 'Ex: Je suis devant le portail bleu...',
+                  hintStyle: GoogleFonts.poppins(fontSize: 14.sp, color: Colors.white.withOpacity(0.4)),
+                  filled: true,
+                  fillColor: AppColors.darkLight,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12.r),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+              ),
+              SizedBox(height: 16.h),
+              SizedBox(
+                width: double.infinity,
+                height: 48.h,
+                child: ElevatedButton(
+                  onPressed: () {
+                    setState(() => _driverComment = controller.text.trim());
+                    Navigator.pop(ctx);
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.r)),
+                  ),
+                  child: Text('Enregistrer', style: GoogleFonts.poppins(
+                    fontSize: 15.sp, fontWeight: FontWeight.w600, color: Colors.white,
+                  )),
+                ),
+              ),
+              SizedBox(height: 10.h),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showPaymentSheet() {
+    final paymentOptions = [
+      {'label': AppStrings.cash, 'icon': Icons.payments_rounded, 'index': 0},
+      {'label': 'M-Pesa', 'icon': Icons.phone_android_rounded, 'index': 1},
+      {'label': 'Airtel Money', 'icon': Icons.phone_android_rounded, 'index': 2},
+      {'label': 'Orange Money', 'icon': Icons.phone_android_rounded, 'index': 3},
+    ];
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20.r)),
+        ),
+        padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 16.h),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 36.w, height: 4.h,
+                decoration: BoxDecoration(
+                  color: AppColors.border,
+                  borderRadius: BorderRadius.circular(2.r),
+                ),
+              ),
+            ),
+            SizedBox(height: 16.h),
+            Text(
+              AppStrings.paymentMethod,
+              style: GoogleFonts.poppins(
+                fontSize: 16.sp, fontWeight: FontWeight.w600,
+                color: AppColors.textPrimary,
+              ),
+            ),
+            SizedBox(height: 14.h),
+            ...paymentOptions.map((opt) {
+              final idx = opt['index'] as int;
+              final isActive = _selectedPayment == idx;
+              return GestureDetector(
+                onTap: () {
+                  setState(() => _selectedPayment = idx);
+                  Navigator.pop(ctx);
+                },
+                child: Container(
+                  margin: EdgeInsets.only(bottom: 8.h),
+                  padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 14.h),
+                  decoration: BoxDecoration(
+                    color: isActive ? AppColors.primary.withOpacity(0.08) : AppColors.surfaceVariant,
+                    borderRadius: BorderRadius.circular(12.r),
+                    border: Border.all(
+                      color: isActive ? AppColors.primary : Colors.transparent,
+                      width: 1.5,
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(opt['icon'] as IconData, size: 22.sp,
+                        color: isActive ? AppColors.primary : AppColors.textSecondary),
+                      SizedBox(width: 14.w),
+                      Text(
+                        opt['label'] as String,
+                        style: GoogleFonts.poppins(
+                          fontSize: 14.sp,
+                          fontWeight: FontWeight.w500,
+                          color: isActive ? AppColors.primary : AppColors.textPrimary,
+                        ),
+                      ),
+                      const Spacer(),
+                      if (isActive)
+                        Icon(Icons.check_circle_rounded, size: 20.sp, color: AppColors.primary),
+                    ],
+                  ),
+                ),
+              );
+            }),
+            SizedBox(height: 10.h),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -518,6 +705,65 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               mapToolbarEnabled: false,
             ),
           ),
+
+          // ── Floating ETA badge (Yango-style red pill on map) ──
+          if (_destinationLocation != null && _routeDurationMinutes > 0)
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 60.h,
+              right: 16.w,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  // Red ETA badge
+                  Container(
+                    padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 8.h),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEF4444),
+                      borderRadius: BorderRadius.circular(12.r),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFFEF4444).withOpacity(0.4),
+                          blurRadius: 12,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: Text(
+                      '$_routeDurationMinutes min',
+                      style: GoogleFonts.poppins(
+                        fontSize: 16.sp,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                  SizedBox(height: 4.h),
+                  // Arrival time label
+                  Container(
+                    padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 4.h),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(8.r),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.1),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: Text(
+                      'arrivée à ${_arrivalTimeString()}',
+                      style: GoogleFonts.poppins(
+                        fontSize: 12.sp,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
 
           // ── Dark header (hidden when destination selected) ──
           if (_destinationLocation == null)
@@ -646,6 +892,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     _destinationLocation = null;
                     _destinationAddress = '';
                     _priceEstimate = null;
+                    _routeDurationMinutes = 0;
                     _polylines.clear();
                     _markers.removeWhere((m) =>
                         m.markerId.value == 'pickup' ||
@@ -788,13 +1035,15 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
           // ── Scrollable bottom sheet ──
           DraggableScrollableSheet(
-            initialChildSize: 0.38,
+            initialChildSize: _destinationLocation != null ? 0.48 : 0.42,
             minChildSize: 0.12,
-            maxChildSize: 0.65,
+            maxChildSize: _destinationLocation != null ? 0.75 : 0.55,
             builder: (context, scrollController) {
+              final bool hasRoute = _destinationLocation != null;
+              final bool hasPrice = _priceEstimate != null;
               return Container(
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: hasRoute ? AppColors.dark : Colors.white,
                   borderRadius: BorderRadius.vertical(
                     top: Radius.circular(24.r),
                   ),
@@ -813,181 +1062,102 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     // Drag handle
                     Center(
                       child: Container(
-                        margin: EdgeInsets.only(top: 10.h, bottom: 14.h),
+                        margin: EdgeInsets.only(top: 10.h, bottom: 10.h),
                         width: 36.w,
                         height: 4.h,
                         decoration: BoxDecoration(
-                          color: AppColors.border,
+                          color: hasRoute ? Colors.white.withOpacity(0.3) : AppColors.border,
                           borderRadius: BorderRadius.circular(2.r),
                         ),
                       ),
                     ),
 
-                    // Ride type pills
+                    // ── Pickup address row ──
                     Padding(
                       padding: EdgeInsets.symmetric(horizontal: 20.w),
                       child: Row(
                         children: [
-                          _RideTypePill(
-                            label: AppStrings.immediateRide,
-                            icon: Icons.bolt_rounded,
-                            isActive: _selectedRideType == 0,
-                            onTap: () => setState(() => _selectedRideType = 0),
-                          ),
-                          SizedBox(width: 10.w),
-                          _RideTypePill(
-                            label: AppStrings.scheduleRide,
-                            icon: Icons.schedule_rounded,
-                            isActive: _selectedRideType == 1,
-                            onTap: () => setState(() => _selectedRideType = 1),
-                          ),
-                        ],
-                      ),
-                    ),
-                    SizedBox(height: 20.h),
-
-                    // Vehicle type cards
-                    SizedBox(
-                      height: 110.h,
-                      child: ListView(
-                        scrollDirection: Axis.horizontal,
-                        padding: EdgeInsets.symmetric(horizontal: 20.w),
-                        children: [
-                          _VehicleCard(
-                            icon: Icons.directions_car_rounded,
-                            title: AppStrings.vehicleStandard,
-                            subtitle: AppStrings.vehicleStandardDesc,
-                            isSelected: _selectedVehicle == 0,
-                            onTap: () { setState(() => _selectedVehicle = 0); _loadNearbyDrivers(); },
-                          ),
-                          SizedBox(width: 10.w),
-                          _VehicleCard(
-                            icon: Icons.airline_seat_recline_extra_rounded,
-                            title: AppStrings.vehicleComfort,
-                            subtitle: AppStrings.vehicleComfortDesc,
-                            isSelected: _selectedVehicle == 1,
-                            onTap: () { setState(() => _selectedVehicle = 1); _loadNearbyDrivers(); },
-                          ),
-                          SizedBox(width: 10.w),
-                          _VehicleCard(
-                            icon: Icons.two_wheeler_rounded,
-                            title: AppStrings.vehicleMoto,
-                            subtitle: AppStrings.vehicleMotoDesc,
-                            isSelected: _selectedVehicle == 2,
-                            onTap: () { setState(() => _selectedVehicle = 2); _loadNearbyDrivers(); },
-                          ),
-                          SizedBox(width: 10.w),
-                          _VehicleCard(
-                            icon: Icons.airport_shuttle_rounded,
-                            title: AppStrings.vehicleGroup,
-                            subtitle: AppStrings.vehicleGroupDesc,
-                            isSelected: _selectedVehicle == 3,
-                            onTap: () { setState(() => _selectedVehicle = 3); _loadNearbyDrivers(); },
-                          ),
-                        ],
-                      ),
-                    ),
-                    SizedBox(height: 20.h),
-
-                    // Divider
-                    Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 20.w),
-                      child: Divider(height: 1, color: AppColors.border.withOpacity(0.5)),
-                    ),
-                    SizedBox(height: 16.h),
-
-                    // Payment method selector
-                    Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 20.w),
-                      child: Row(
-                        children: [
-                          Icon(Icons.payment_rounded, size: 16.sp, color: AppColors.textHint),
-                          SizedBox(width: 8.w),
-                          Text(
-                            AppStrings.paymentMethod,
-                            style: GoogleFonts.poppins(
-                              fontSize: 13.sp,
-                              fontWeight: FontWeight.w500,
-                              color: AppColors.textSecondary,
+                          Icon(Icons.directions_walk_rounded, size: 22.sp,
+                            color: hasRoute ? Colors.white.withOpacity(0.6) : AppColors.textSecondary),
+                          SizedBox(width: 14.w),
+                          Expanded(
+                            child: Text(
+                              _pickupAddress.isNotEmpty ? _pickupAddress : 'Ma position',
+                              style: GoogleFonts.poppins(
+                                fontSize: 15.sp,
+                                fontWeight: FontWeight.w500,
+                                color: hasRoute ? Colors.white : AppColors.textPrimary,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                             ),
                           ),
                         ],
                       ),
                     ),
-                    SizedBox(height: 10.h),
+                    Padding(
+                      padding: EdgeInsets.only(left: 56.w, right: 20.w, top: 10.h, bottom: 10.h),
+                      child: Divider(height: 1, color: hasRoute ? Colors.white.withOpacity(0.12) : AppColors.border),
+                    ),
+
+                    // ── Destination address row ──
                     Padding(
                       padding: EdgeInsets.symmetric(horizontal: 20.w),
-                      child: Row(
-                        children: [
-                          _PaymentPill(
-                            label: AppStrings.cash,
-                            icon: Icons.money_rounded,
-                            isActive: _selectedPayment == 0,
-                            onTap: () => setState(() => _selectedPayment = 0),
-                          ),
-                          SizedBox(width: 8.w),
-                          _PaymentPill(
-                            label: 'M-Pesa',
-                            icon: Icons.phone_android_rounded,
-                            isActive: _selectedPayment == 1,
-                            onTap: () => setState(() => _selectedPayment = 1),
-                          ),
-                          SizedBox(width: 8.w),
-                          _PaymentPill(
-                            label: 'Airtel',
-                            icon: Icons.phone_android_rounded,
-                            isActive: _selectedPayment == 2,
-                            onTap: () => setState(() => _selectedPayment = 2),
-                          ),
-                          SizedBox(width: 8.w),
-                          _PaymentPill(
-                            label: 'Orange',
-                            icon: Icons.phone_android_rounded,
-                            isActive: _selectedPayment == 3,
-                            onTap: () => setState(() => _selectedPayment = 3),
-                          ),
-                        ],
-                      ),
-                    ),
-                    SizedBox(height: 16.h),
-
-                    // Destination summary (when selected)
-                    if (_destinationLocation != null) ...[
-                      Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 20.w),
-                        child: Divider(height: 1, color: AppColors.border.withOpacity(0.5)),
-                      ),
-                      SizedBox(height: 14.h),
-                      Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 20.w),
-                        child: Container(
-                          padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 10.h),
-                          decoration: BoxDecoration(
-                            color: AppColors.success.withOpacity(0.06),
-                            borderRadius: BorderRadius.circular(12.r),
-                          ),
-                          child: Row(
-                            children: [
-                              Icon(Icons.location_on_rounded, color: AppColors.success, size: 18.sp),
-                              SizedBox(width: 10.w),
-                              Expanded(
-                                child: Text(
-                                  _destinationAddress,
-                                  style: GoogleFonts.poppins(
-                                    fontSize: 12.sp,
-                                    fontWeight: FontWeight.w500,
-                                    color: AppColors.textPrimary,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
+                      child: GestureDetector(
+                        onTap: _destinationLocation == null ? _showDestinationSearch : null,
+                        child: Row(
+                          children: [
+                            Icon(
+                              hasRoute ? Icons.flag_rounded : Icons.location_searching_rounded,
+                              size: 22.sp,
+                              color: hasRoute ? AppColors.primary : AppColors.primary,
+                            ),
+                            SizedBox(width: 14.w),
+                            Expanded(
+                              child: _destinationLocation != null
+                                  ? Row(
+                                      children: [
+                                        Flexible(
+                                          child: Text(
+                                            _destinationAddress,
+                                            style: GoogleFonts.poppins(
+                                              fontSize: 15.sp,
+                                              fontWeight: FontWeight.w500,
+                                              color: Colors.white,
+                                            ),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                        if (_routeDurationMinutes > 0) ...[
+                                          SizedBox(width: 6.w),
+                                          Text(
+                                            '• $_routeDurationMinutes min.',
+                                            style: GoogleFonts.poppins(
+                                              fontSize: 13.sp,
+                                              color: Colors.white.withOpacity(0.5),
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                    )
+                                  : Text(
+                                      'Où allez-vous ?',
+                                      style: GoogleFonts.poppins(
+                                        fontSize: 15.sp,
+                                        fontWeight: FontWeight.w500,
+                                        color: AppColors.textHint,
+                                      ),
+                                    ),
+                            ),
+                            if (_destinationLocation != null)
                               GestureDetector(
                                 onTap: () {
                                   setState(() {
                                     _destinationLocation = null;
                                     _destinationAddress = '';
                                     _priceEstimate = null;
+                                    _routeDurationMinutes = 0;
                                     _polylines.clear();
                                     _markers.removeWhere((m) =>
                                         m.markerId.value == 'pickup' ||
@@ -995,124 +1165,348 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                   });
                                   _ctaAnimController.reverse();
                                 },
-                                child: Icon(Icons.close_rounded, color: AppColors.textHint, size: 16.sp),
+                                child: Padding(
+                                  padding: EdgeInsets.only(left: 8.w),
+                                  child: Icon(Icons.close_rounded,
+                                    color: hasRoute ? Colors.white.withOpacity(0.5) : AppColors.textHint, size: 18.sp),
+                                ),
                               ),
-                            ],
-                          ),
+                          ],
                         ),
                       ),
-                      SizedBox(height: 12.h),
-                    ],
+                    ),
+                    SizedBox(height: 10.h),
 
-                    // Price estimate display
-                    if (_priceEstimate != null) ...[
-                      Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 20.w),
+                    // ── Divider ──
+                    Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 20.w),
+                      child: Divider(height: 1, color: hasRoute ? Colors.white.withOpacity(0.12) : AppColors.border),
+                    ),
+
+                    // ── Large car banner + huge price (Yango expanded dark panel) ──
+                    if (hasRoute && hasPrice) ...[
+                      SizedBox(height: 16.h),
+                      Container(
+                        margin: EdgeInsets.symmetric(horizontal: 16.w),
+                        padding: EdgeInsets.all(16.w),
+                        decoration: BoxDecoration(
+                          color: AppColors.darkLight,
+                          borderRadius: BorderRadius.circular(16.r),
+                        ),
                         child: Row(
                           children: [
-                            Expanded(
-                              child: _InfoChip(
-                                icon: Icons.payments_rounded,
-                                label: '${_priceEstimate!['estimated_price']} CDF',
-                                color: AppColors.primary,
-                              ),
+                            Icon(
+                              _selectedVehicle == 2 ? Icons.two_wheeler_rounded
+                                  : _selectedVehicle == 3 ? Icons.airport_shuttle_rounded
+                                  : Icons.directions_car_filled_rounded,
+                              size: 56.sp,
+                              color: AppColors.primary,
                             ),
-                            SizedBox(width: 8.w),
+                            SizedBox(width: 16.w),
                             Expanded(
-                              child: _InfoChip(
-                                icon: Icons.route_rounded,
-                                label: '${_priceEstimate!['distance_km']} km',
-                                color: AppColors.info,
-                              ),
-                            ),
-                            SizedBox(width: 8.w),
-                            Expanded(
-                              child: _InfoChip(
-                                icon: Icons.schedule_rounded,
-                                label: '${(_priceEstimate!['estimated_duration_minutes'] as num).toInt()} min',
-                                color: AppColors.success,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Courses',
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 13.sp,
+                                      fontWeight: FontWeight.w500,
+                                      color: Colors.white.withOpacity(0.6),
+                                    ),
+                                  ),
+                                  SizedBox(height: 2.h),
+                                  Text(
+                                    _categoryPrice([1.0, 1.2, 0.65, 1.5][_selectedVehicle]),
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 26.sp,
+                                      fontWeight: FontWeight.w800,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
                           ],
                         ),
                       ),
-                      SizedBox(height: 16.h),
                     ],
 
-                    // CTA button – only visible when destination is chosen
-                    if (_destinationLocation != null)
-                      AnimatedBuilder(
-                        animation: _ctaScaleAnim,
-                        builder: (context, child) {
-                          return Transform.scale(
-                            scale: _ctaScaleAnim.value,
-                            child: child,
-                          );
-                        },
-                        child: Padding(
-                          padding: EdgeInsets.symmetric(horizontal: 20.w),
-                          child: Container(
-                            width: double.infinity,
-                            decoration: BoxDecoration(
-                              gradient: const LinearGradient(
-                                colors: AppColors.ctaGradient,
-                                begin: Alignment.centerLeft,
-                                end: Alignment.centerRight,
-                              ),
-                              borderRadius: BorderRadius.circular(16.r),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: AppColors.primaryDark.withOpacity(0.3),
-                                  blurRadius: 14,
-                                  offset: const Offset(0, 5),
+                    SizedBox(height: 12.h),
+
+                    // ── Vehicle type cards (Yango-style) ──
+                    SizedBox(
+                      height: 138.h,
+                      child: ListView(
+                        scrollDirection: Axis.horizontal,
+                        padding: EdgeInsets.symmetric(horizontal: 16.w),
+                        children: [
+                          _YangoVehicleCard(
+                            icon: Icons.directions_car_filled_rounded,
+                            iconColor: const Color(0xFFD97706),
+                            title: AppStrings.vehicleStandard,
+                            eta: _routeDurationMinutes > 0 ? '$_routeDurationMinutes min.' : null,
+                            price: hasPrice ? _categoryPrice(1.0) : null,
+                            isSelected: _selectedVehicle == 0,
+                            isDark: hasRoute,
+                            onTap: () { setState(() => _selectedVehicle = 0); _loadNearbyDrivers(); },
+                          ),
+                          SizedBox(width: 8.w),
+                          _YangoVehicleCard(
+                            icon: Icons.directions_car_filled_rounded,
+                            iconColor: const Color(0xFF3B82F6),
+                            title: AppStrings.vehicleComfort,
+                            eta: _routeDurationMinutes > 0 ? '${_routeDurationMinutes + 5} min.' : null,
+                            price: hasPrice ? _categoryPrice(1.2) : null,
+                            isSelected: _selectedVehicle == 1,
+                            isDark: hasRoute,
+                            onTap: () { setState(() => _selectedVehicle = 1); _loadNearbyDrivers(); },
+                          ),
+                          SizedBox(width: 8.w),
+                          _YangoVehicleCard(
+                            icon: Icons.two_wheeler_rounded,
+                            iconColor: const Color(0xFF10B981),
+                            title: AppStrings.vehicleMoto,
+                            eta: _routeDurationMinutes > 0 ? '${(_routeDurationMinutes - 3).clamp(1, 999)} min.' : null,
+                            price: hasPrice ? _categoryPrice(0.65) : null,
+                            isSelected: _selectedVehicle == 2,
+                            isDark: hasRoute,
+                            onTap: () { setState(() => _selectedVehicle = 2); _loadNearbyDrivers(); },
+                          ),
+                          SizedBox(width: 8.w),
+                          _YangoVehicleCard(
+                            icon: Icons.airport_shuttle_rounded,
+                            iconColor: const Color(0xFF8B5CF6),
+                            title: AppStrings.vehicleGroup,
+                            eta: _routeDurationMinutes > 0 ? '${_routeDurationMinutes + 10} min.' : null,
+                            price: hasPrice ? _categoryPrice(1.5) : null,
+                            isSelected: _selectedVehicle == 3,
+                            isDark: hasRoute,
+                            onTap: () { setState(() => _selectedVehicle = 3); _loadNearbyDrivers(); },
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    // ── Yango extra options (only when route selected) ──
+                    if (hasRoute) ...[
+                      SizedBox(height: 8.h),
+                      // "Non aux négociations de prix!" warning
+                      Container(
+                        margin: EdgeInsets.symmetric(horizontal: 16.w),
+                        padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 10.h),
+                        decoration: BoxDecoration(
+                          color: AppColors.darkLight,
+                          borderRadius: BorderRadius.circular(12.r),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.check_circle_rounded, size: 18.sp, color: AppColors.error),
+                            SizedBox(width: 10.w),
+                            Expanded(
+                              child: Text(
+                                'Non aux négociations de prix !',
+                                style: GoogleFonts.poppins(
+                                  fontSize: 13.sp,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.white.withOpacity(0.85),
                                 ),
-                              ],
+                              ),
                             ),
-                            child: Material(
-                              color: Colors.transparent,
-                              child: InkWell(
-                                onTap: () {
-                                  if (_priceEstimate != null) {
-                                    _showRideRequestSheet();
-                                  } else {
-                                    _estimatePrice();
-                                  }
-                                },
-                                borderRadius: BorderRadius.circular(16.r),
-                                child: Padding(
-                                  padding: EdgeInsets.symmetric(vertical: 14.h),
-                                  child: Row(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Icon(
-                                        Icons.local_taxi_rounded,
-                                        size: 20.sp,
-                                        color: Colors.white,
-                                      ),
-                                      SizedBox(width: 10.w),
-                                      Text(
-                                        AppStrings.orderRide,
-                                        style: GoogleFonts.poppins(
-                                          fontSize: 15.sp,
-                                          fontWeight: FontWeight.w700,
-                                          letterSpacing: 0.2,
-                                          color: Colors.white,
-                                        ),
-                                      ),
-                                      SizedBox(width: 8.w),
-                                      Icon(
-                                        Icons.arrow_forward_rounded,
-                                        size: 16.sp,
-                                        color: Colors.white.withOpacity(0.8),
-                                      ),
-                                    ],
+                          ],
+                        ),
+                      ),
+                      SizedBox(height: 8.h),
+                      // Payment modification row
+                      GestureDetector(
+                        onTap: _showPaymentSheet,
+                        child: Container(
+                          margin: EdgeInsets.symmetric(horizontal: 16.w),
+                          padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 12.h),
+                          decoration: BoxDecoration(
+                            color: AppColors.darkLight,
+                            borderRadius: BorderRadius.circular(12.r),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(
+                                _selectedPayment == 0 ? Icons.payments_rounded : Icons.phone_android_rounded,
+                                size: 20.sp, color: AppColors.primary,
+                              ),
+                              SizedBox(width: 10.w),
+                              Expanded(
+                                child: Text(
+                                  'Modification de la modalité de paiement — ${['Espèces', 'M-Pesa', 'Airtel Money', 'Orange Money'][_selectedPayment]}',
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 13.sp,
+                                    fontWeight: FontWeight.w500,
+                                    color: Colors.white.withOpacity(0.85),
+                                  ),
+                                ),
+                              ),
+                              Icon(Icons.chevron_right_rounded, size: 18.sp, color: Colors.white.withOpacity(0.4)),
+                            ],
+                          ),
+                        ),
+                      ),
+                      SizedBox(height: 8.h),
+                      // Comments for driver
+                      GestureDetector(
+                        onTap: () => _showDriverCommentSheet(),
+                        child: Container(
+                          margin: EdgeInsets.symmetric(horizontal: 16.w),
+                          padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 12.h),
+                          decoration: BoxDecoration(
+                            color: AppColors.darkLight,
+                            borderRadius: BorderRadius.circular(12.r),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(Icons.chat_bubble_outline_rounded, size: 20.sp, color: Colors.white.withOpacity(0.6)),
+                              SizedBox(width: 10.w),
+                              Expanded(
+                                child: Text(
+                                  _driverComment.isNotEmpty ? _driverComment : 'Commentaires pour le conducteur',
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 13.sp,
+                                    fontWeight: FontWeight.w500,
+                                    color: Colors.white.withOpacity(0.85),
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              Icon(Icons.chevron_right_rounded, size: 18.sp, color: Colors.white.withOpacity(0.4)),
+                            ],
+                          ),
+                        ),
+                      ),
+                      SizedBox(height: 8.h),
+                      // Order for someone else
+                      GestureDetector(
+                        onTap: () {},
+                        child: Container(
+                          margin: EdgeInsets.symmetric(horizontal: 16.w),
+                          padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 12.h),
+                          decoration: BoxDecoration(
+                            color: AppColors.darkLight,
+                            borderRadius: BorderRadius.circular(12.r),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(Icons.person_add_alt_1_rounded, size: 20.sp, color: Colors.white.withOpacity(0.6)),
+                              SizedBox(width: 10.w),
+                              Expanded(
+                                child: Text(
+                                  'Commande à une autre personne',
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 13.sp,
+                                    fontWeight: FontWeight.w500,
+                                    color: Colors.white.withOpacity(0.85),
+                                  ),
+                                ),
+                              ),
+                              Icon(Icons.chevron_right_rounded, size: 18.sp, color: Colors.white.withOpacity(0.4)),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+
+                    SizedBox(height: 12.h),
+
+                    // ── Bottom bar: Payment + Commander + Settings ──
+                    Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 16.w),
+                      child: Row(
+                        children: [
+                          // Payment method icon
+                          if (!hasRoute)
+                            GestureDetector(
+                              onTap: _showPaymentSheet,
+                              child: Container(
+                                width: 46.w,
+                                height: 46.w,
+                                decoration: BoxDecoration(
+                                  color: AppColors.surfaceVariant,
+                                  borderRadius: BorderRadius.circular(12.r),
+                                ),
+                                child: Icon(
+                                  _selectedPayment == 0
+                                      ? Icons.payments_rounded
+                                      : Icons.phone_android_rounded,
+                                  size: 22.sp,
+                                  color: AppColors.success,
+                                ),
+                              ),
+                            ),
+                          if (!hasRoute) SizedBox(width: 10.w),
+                          // Commander button
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: _destinationLocation != null
+                                  ? () {
+                                      if (_priceEstimate != null) {
+                                        _showRideRequestSheet();
+                                      } else {
+                                        _estimatePrice();
+                                      }
+                                    }
+                                  : _showDestinationSearch,
+                              child: Container(
+                                height: 50.h,
+                                decoration: BoxDecoration(
+                                  gradient: const LinearGradient(
+                                    colors: AppColors.ctaGradient,
+                                    begin: Alignment.centerLeft,
+                                    end: Alignment.centerRight,
+                                  ),
+                                  borderRadius: BorderRadius.circular(14.r),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: AppColors.primaryDark.withOpacity(0.25),
+                                      blurRadius: 10,
+                                      offset: const Offset(0, 4),
+                                    ),
+                                  ],
+                                ),
+                                child: Center(
+                                  child: Text(
+                                    _destinationLocation != null
+                                        ? AppStrings.orderRide
+                                        : 'Où allez-vous ?',
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 16.sp,
+                                      fontWeight: FontWeight.w700,
+                                      color: Colors.white,
+                                    ),
                                   ),
                                 ),
                               ),
                             ),
                           ),
-                        ),
+                          if (!hasRoute) SizedBox(width: 10.w),
+                          // Ride type / settings icon
+                          if (!hasRoute)
+                            GestureDetector(
+                              onTap: () => setState(() => _selectedRideType = _selectedRideType == 0 ? 1 : 0),
+                              child: Container(
+                                width: 46.w,
+                                height: 46.w,
+                                decoration: BoxDecoration(
+                                  color: AppColors.surfaceVariant,
+                                  borderRadius: BorderRadius.circular(12.r),
+                                ),
+                                child: Icon(
+                                  _selectedRideType == 0 ? Icons.tune_rounded : Icons.schedule_rounded,
+                                  size: 22.sp,
+                                  color: AppColors.textSecondary,
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
+                    ),
                     SizedBox(height: 14.h),
                   ],
                 ),
@@ -1212,222 +1606,111 @@ class _MapFab extends StatelessWidget {
   }
 }
 
-class _RideTypePill extends StatelessWidget {
-  final String label;
+class _YangoVehicleCard extends StatelessWidget {
   final IconData icon;
-  final bool isActive;
-  final VoidCallback onTap;
-
-  const _RideTypePill({
-    required this.label,
-    required this.icon,
-    required this.isActive,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: EdgeInsets.symmetric(horizontal: 18.w, vertical: 10.h),
-        decoration: BoxDecoration(
-          color: isActive ? AppColors.primary : AppColors.surfaceVariant,
-          borderRadius: BorderRadius.circular(30.r),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              icon,
-              size: 16.sp,
-              color: isActive ? Colors.white : AppColors.textSecondary,
-            ),
-            SizedBox(width: 6.w),
-            Text(
-              label,
-              style: GoogleFonts.poppins(
-                fontSize: 13.sp,
-                fontWeight: FontWeight.w600,
-                color: isActive ? Colors.white : AppColors.textSecondary,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _VehicleCard extends StatelessWidget {
-  final IconData icon;
+  final Color iconColor;
   final String title;
-  final String subtitle;
+  final String? eta;
+  final String? price;
   final bool isSelected;
+  final bool isDark;
   final VoidCallback onTap;
 
-  const _VehicleCard({
+  const _YangoVehicleCard({
     required this.icon,
+    required this.iconColor,
     required this.title,
-    required this.subtitle,
+    this.eta,
+    this.price,
     required this.isSelected,
+    this.isDark = false,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
+    final bgColor = isDark
+        ? (isSelected ? AppColors.darkLight : AppColors.dark.withOpacity(0.6))
+        : (isSelected ? Colors.white : AppColors.surfaceVariant);
+    final textColor = isDark ? Colors.white : AppColors.textPrimary;
+    final hintColor = isDark ? Colors.white.withOpacity(0.5) : AppColors.textHint;
+
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
-        width: 120.w,
-        padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 10.h),
+        width: 150.w,
+        padding: EdgeInsets.all(10.w),
         decoration: BoxDecoration(
-          color: isSelected ? AppColors.primary.withOpacity(0.08) : AppColors.surfaceVariant,
-          borderRadius: BorderRadius.circular(16.r),
+          color: bgColor,
+          borderRadius: BorderRadius.circular(14.r),
           border: Border.all(
             color: isSelected ? AppColors.primary : Colors.transparent,
             width: 1.5,
           ),
+          boxShadow: isSelected
+              ? [
+                  BoxShadow(
+                    color: AppColors.primary.withOpacity(0.12),
+                    blurRadius: 10,
+                    offset: const Offset(0, 3),
+                  ),
+                ]
+              : [],
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Container(
-              width: 32.w,
-              height: 32.w,
-              decoration: BoxDecoration(
-                color: isSelected
-                    ? AppColors.primary.withOpacity(0.15)
-                    : Colors.white,
-                borderRadius: BorderRadius.circular(10.r),
-              ),
-              child: Icon(
-                icon,
-                size: 18.sp,
-                color: isSelected ? AppColors.primary : AppColors.textSecondary,
-              ),
+            // Vehicle icon + ETA row
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (eta != null)
+                  Container(
+                    padding: EdgeInsets.symmetric(horizontal: 6.w, vertical: 2.h),
+                    decoration: BoxDecoration(
+                      color: textColor.withOpacity(0.08),
+                      borderRadius: BorderRadius.circular(6.r),
+                    ),
+                    child: Text(
+                      eta!,
+                      style: GoogleFonts.poppins(
+                        fontSize: 10.sp,
+                        fontWeight: FontWeight.w600,
+                        color: textColor,
+                      ),
+                    ),
+                  ),
+                const Spacer(),
+                Icon(icon, size: 36.sp, color: iconColor),
+              ],
             ),
             const Spacer(),
+            // Category name
             Text(
               title,
               style: GoogleFonts.poppins(
-                fontSize: 12.sp,
-                fontWeight: FontWeight.w600,
-                color: isSelected ? AppColors.primary : AppColors.textPrimary,
+                fontSize: 13.sp,
+                fontWeight: FontWeight.w700,
+                color: textColor,
               ),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
+            SizedBox(height: 2.h),
+            // Price
             Text(
-              subtitle,
+              price != null ? 'à partir de $price' : '—',
               style: GoogleFonts.poppins(
-                fontSize: 10.sp,
-                color: AppColors.textHint,
+                fontSize: 11.sp,
+                fontWeight: price != null ? FontWeight.w600 : FontWeight.w400,
+                color: price != null ? textColor : hintColor,
               ),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _PaymentPill extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final bool isActive;
-  final VoidCallback onTap;
-
-  const _PaymentPill({
-    required this.label,
-    required this.icon,
-    required this.isActive,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Expanded(
-      child: GestureDetector(
-        onTap: onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          padding: EdgeInsets.symmetric(vertical: 10.h),
-          decoration: BoxDecoration(
-            color: isActive ? AppColors.primary.withOpacity(0.1) : AppColors.surfaceVariant,
-            borderRadius: BorderRadius.circular(12.r),
-            border: Border.all(
-              color: isActive ? AppColors.primary : Colors.transparent,
-              width: 1.5,
-            ),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                icon,
-                size: 16.sp,
-                color: isActive ? AppColors.primary : AppColors.textSecondary,
-              ),
-              SizedBox(height: 4.h),
-              Text(
-                label,
-                style: GoogleFonts.poppins(
-                  fontSize: 10.sp,
-                  fontWeight: FontWeight.w600,
-                  color: isActive ? AppColors.primary : AppColors.textSecondary,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _InfoChip extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final Color color;
-
-  const _InfoChip({
-    required this.icon,
-    required this.label,
-    required this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 10.h),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(12.r),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 14.sp, color: color),
-          SizedBox(width: 6.w),
-          Flexible(
-            child: Text(
-              label,
-              style: GoogleFonts.poppins(
-                fontSize: 12.sp,
-                fontWeight: FontWeight.w700,
-                color: color,
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        ],
       ),
     );
   }

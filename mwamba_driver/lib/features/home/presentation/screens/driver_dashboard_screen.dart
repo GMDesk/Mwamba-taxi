@@ -15,6 +15,7 @@ import '../../../../core/network/api_client.dart';
 import '../../../../core/services/driver_status_notifier.dart';
 import '../../../../core/services/ride_request_notifier.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/utils/vehicle_asset_marker.dart';
 import '../../../../core/widgets/app_alert.dart';
 
 class DriverDashboardScreen extends StatefulWidget {
@@ -36,6 +37,8 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen>
   // Map
   GoogleMapController? _mapController;
   LatLng _currentPosition = const LatLng(-4.3250, 15.3222);
+  double _heading = 0;
+  BitmapDescriptor? _carIcon;
   StreamSubscription<Position>? _positionSub;
 
   // Profile & stats
@@ -60,6 +63,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen>
     )..repeat(reverse: true);
     _loadDashboardData();
     _initLocation();
+    _loadCarIcon();
   }
 
   @override
@@ -88,6 +92,16 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen>
     super.dispose();
   }
 
+  Future<void> _loadCarIcon() async {
+    _carIcon = await getVehicleMarker(
+      heading: _heading,
+      zoom: 15,
+      state: VehicleState.available,
+      isDriverSelf: true,
+    );
+    if (mounted) setState(() {});
+  }
+
   Future<void> _initLocation() async {
     final permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
@@ -108,8 +122,17 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen>
         accuracy: LocationAccuracy.high,
         distanceFilter: 20,
       ),
-    ).listen((pos) {
-      setState(() => _currentPosition = LatLng(pos.latitude, pos.longitude));
+    ).listen((pos) async {
+      final newPos = LatLng(pos.latitude, pos.longitude);
+      _heading = pos.heading;
+      _currentPosition = newPos;
+      _carIcon = await getVehicleMarker(
+        heading: _heading,
+        zoom: 15,
+        state: VehicleState.available,
+        isDriverSelf: true,
+      );
+      if (mounted) setState(() {});
       _mapController?.animateCamera(CameraUpdate.newLatLng(_currentPosition));
       _api.dio.post(ApiConstants.updateLocation, data: {
         'latitude': pos.latitude,
@@ -257,10 +280,22 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen>
                       final style = await rootBundle.loadString('assets/map_style_light.json');
                       c.setMapStyle(style);
                     },
-                    myLocationEnabled: true,
+                    myLocationEnabled: false,
                     myLocationButtonEnabled: false,
                     zoomControlsEnabled: false,
                     mapToolbarEnabled: false,
+                    markers: _carIcon != null
+                        ? {
+                            Marker(
+                              markerId: const MarkerId('driver_self'),
+                              position: _currentPosition,
+                              icon: _carIcon!,
+                              anchor: const Offset(0.5, 0.5),
+                              flat: true,
+                              zIndex: 3,
+                            ),
+                          }
+                        : {},
                   ),
                 ),
               ],
@@ -541,19 +576,27 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen>
                   child: Container(
                     padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 14.h),
                     decoration: BoxDecoration(
-                      color: AppColors.background,
+                      color: Colors.white,
                       borderRadius: BorderRadius.circular(14.r),
+                      border: Border.all(color: Colors.grey.shade200),
                     ),
                     child: Row(
                       children: [
-                        Icon(Icons.history_rounded, color: AppColors.textSecondary, size: 20.sp),
+                        Container(
+                          padding: EdgeInsets.all(8.r),
+                          decoration: BoxDecoration(
+                            color: AppColors.primary.withOpacity(0.08),
+                            borderRadius: BorderRadius.circular(10.r),
+                          ),
+                          child: Icon(Icons.history_rounded, color: AppColors.primary, size: 18.sp),
+                        ),
                         SizedBox(width: 10.w),
                         Text(
                           'Voir l\'historique des courses',
                           style: TextStyle(
-                            color: AppColors.textSecondary,
+                            color: AppColors.textPrimary,
                             fontSize: 13.sp,
-                            fontWeight: FontWeight.w500,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
                         const Spacer(),
@@ -581,18 +624,34 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen>
       child: Container(
         padding: EdgeInsets.symmetric(vertical: 14.h, horizontal: 10.w),
         decoration: BoxDecoration(
-          color: color.withOpacity(0.06),
-          borderRadius: BorderRadius.circular(14.r),
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16.r),
+          border: Border.all(color: color.withOpacity(0.15)),
+          boxShadow: [
+            BoxShadow(
+              color: color.withOpacity(0.08),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            ),
+          ],
         ),
         child: Column(
           children: [
-            Icon(icon, color: color, size: 20.sp),
-            SizedBox(height: 6.h),
+            Container(
+              width: 36.w,
+              height: 36.w,
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(10.r),
+              ),
+              child: Icon(icon, color: color, size: 18.sp),
+            ),
+            SizedBox(height: 8.h),
             Text(
               value,
               style: TextStyle(
                 color: AppColors.textPrimary,
-                fontSize: 14.sp,
+                fontSize: 15.sp,
                 fontWeight: FontWeight.w800,
               ),
               maxLines: 1,
@@ -604,6 +663,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen>
               style: TextStyle(
                 color: AppColors.textSecondary,
                 fontSize: 10.sp,
+                fontWeight: FontWeight.w500,
               ),
             ),
           ],
@@ -627,9 +687,21 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen>
                 end: Alignment.bottomRight,
                 colors: _isOnline
                     ? AppColors.darkGradient
-                    : [Colors.grey.shade100, Colors.grey.shade200],
+                    : [Colors.grey.shade50, Colors.grey.shade100],
               ),
               borderRadius: BorderRadius.circular(20.r),
+              border: _isOnline
+                  ? null
+                  : Border.all(color: Colors.grey.shade200),
+              boxShadow: [
+                BoxShadow(
+                  color: _isOnline
+                      ? AppColors.primaryDark.withOpacity(0.15)
+                      : Colors.black.withOpacity(0.04),
+                  blurRadius: 16,
+                  offset: const Offset(0, 6),
+                ),
+              ],
             ),
             child: Row(
               children: [
@@ -639,7 +711,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen>
                   decoration: BoxDecoration(
                     color: _isOnline
                         ? AppColors.primary.withOpacity(0.15)
-                        : Colors.grey.shade300,
+                        : Colors.grey.shade200,
                     borderRadius: BorderRadius.circular(16.r),
                   ),
                   child: Icon(
@@ -678,6 +750,25 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen>
                     ],
                   ),
                 ),
+                if (!_isOnline)
+                  GestureDetector(
+                    onTap: _toggling ? null : _toggleOnline,
+                    child: Container(
+                      padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 8.h),
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(colors: AppColors.ctaGradient),
+                        borderRadius: BorderRadius.circular(12.r),
+                      ),
+                      child: Text(
+                        'GO',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 13.sp,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),

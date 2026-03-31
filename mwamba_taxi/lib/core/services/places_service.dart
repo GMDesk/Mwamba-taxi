@@ -3,6 +3,23 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import '../constants/api_constants.dart';
 
+/// Result of a route query containing polyline points and duration.
+class RouteResult {
+  final List<LatLng> points;
+  final int durationSeconds;
+  final String durationText;
+  final int distanceMeters;
+
+  const RouteResult({
+    required this.points,
+    required this.durationSeconds,
+    required this.durationText,
+    required this.distanceMeters,
+  });
+
+  static const empty = RouteResult(points: [], durationSeconds: 0, durationText: '', distanceMeters: 0);
+}
+
 /// A prediction returned by the Places Autocomplete API.
 class PlacePrediction {
   final String placeId;
@@ -103,10 +120,9 @@ class PlacesService {
     }
   }
 
-  /// Returns the driving route polyline points between [origin] and [destination].
-  /// Uses Google Directions API and decodes the overview polyline.
-  /// Returns an empty list on failure.
-  Future<List<LatLng>> getRoutePolyline(LatLng origin, LatLng destination) async {
+  /// Returns the driving route between [origin] and [destination] with
+  /// polyline points, duration and distance info.
+  Future<RouteResult> getRoutePolyline(LatLng origin, LatLng destination) async {
     try {
       final response = await _dio.get<Map<String, dynamic>>(
         _directionsUrl,
@@ -119,15 +135,44 @@ class PlacesService {
         },
       );
       final data = response.data!;
-      if (data['status'] != 'OK') return [];
+      if (data['status'] != 'OK') return RouteResult.empty;
       final routes = data['routes'] as List<dynamic>;
-      if (routes.isEmpty) return [];
-      final encodedPolyline =
-          (routes[0] as Map<String, dynamic>)['overview_polyline']['points']
-              as String;
-      return _decodePolyline(encodedPolyline);
+      if (routes.isEmpty) return RouteResult.empty;
+      final route = routes[0] as Map<String, dynamic>;
+      final encodedPolyline = route['overview_polyline']['points'] as String;
+      final leg = (route['legs'] as List<dynamic>)[0] as Map<String, dynamic>;
+      final duration = leg['duration'] as Map<String, dynamic>;
+      final distance = leg['distance'] as Map<String, dynamic>;
+      return RouteResult(
+        points: _decodePolyline(encodedPolyline),
+        durationSeconds: (duration['value'] as num).toInt(),
+        durationText: duration['text'] as String,
+        distanceMeters: (distance['value'] as num).toInt(),
+      );
     } catch (_) {
-      return [];
+      return RouteResult.empty;
+    }
+  }
+
+  /// Reverse-geocodes a [LatLng] to a human-readable address string.
+  /// Returns null on failure.
+  Future<String?> reverseGeocode(LatLng position) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        'https://maps.googleapis.com/maps/api/geocode/json',
+        queryParameters: {
+          'latlng': '${position.latitude},${position.longitude}',
+          'language': 'fr',
+          'key': ApiConstants.googleMapsApiKey,
+        },
+      );
+      final data = response.data!;
+      if (data['status'] != 'OK') return null;
+      final results = data['results'] as List<dynamic>;
+      if (results.isEmpty) return null;
+      return results[0]['formatted_address'] as String?;
+    } catch (_) {
+      return null;
     }
   }
 

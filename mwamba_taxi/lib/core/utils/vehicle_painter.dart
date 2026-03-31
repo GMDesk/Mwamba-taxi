@@ -5,24 +5,25 @@ import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 // ═════════════════════════════════════════════════════════════════════════════
-//  MWAMBA PREMIUM VEHICLE MARKER SYSTEM
-//  Isometric 3/4-view car with multi-angle pre-rendering, state colouring,
-//  and zoom-adaptive sizing.  Comparable to Uber / Yango quality.
+//  MWAMBA PREMIUM VEHICLE MARKER
+//  White metallic sedan – semi-realistic 3/4 top-down perspective
+//  Pure Canvas rendering with realistic wheels, reflections, chrome details.
+//  No shadow · No cartoon · Transparent background
 // ═════════════════════════════════════════════════════════════════════════════
 
-/// Ride-state driven colour scheme.
+/// Ride-state driven accent (halo / indicator).  Body is always white.
 enum VehicleState { available, enRoute, arrived, inProgress }
 
 /// Returns the appropriate car icon pixel size for a given map [zoom] level.
 double carSizeForZoom(double zoom) {
-  if (zoom >= 19) return 100;
-  if (zoom >= 18) return 84;
-  if (zoom >= 17) return 68;
-  if (zoom >= 16) return 56;
-  if (zoom >= 15) return 44;
-  if (zoom >= 14) return 36;
-  if (zoom >= 13) return 30;
-  return 24;
+  if (zoom >= 19) return 120;
+  if (zoom >= 18) return 96;
+  if (zoom >= 17) return 76;
+  if (zoom >= 16) return 62;
+  if (zoom >= 15) return 50;
+  if (zoom >= 14) return 40;
+  if (zoom >= 13) return 34;
+  return 28;
 }
 
 /// Returns polyline pixel width matching road width at [zoom].
@@ -37,88 +38,42 @@ int polylineWidthForZoom(double zoom) {
   return 2;
 }
 
-// ── Colour palettes per state ─────────────────────────────────────────────
-class _Palette {
-  final Color bodyLight;
-  final Color bodyMid;
-  final Color bodyDark;
-  final Color accent;      // headlights / halo tint
-  final Color roofLight;
-  final Color roofDark;
-
-  const _Palette({
-    required this.bodyLight,
-    required this.bodyMid,
-    required this.bodyDark,
-    required this.accent,
-    required this.roofLight,
-    required this.roofDark,
-  });
+// ── Accent colours per state (for halo only – body stays white) ──────────
+class _Acc {
+  final Color primary;
+  final Color glow;
+  const _Acc(this.primary, this.glow);
 }
 
-const _palettes = <VehicleState, _Palette>{
-  VehicleState.available: _Palette(
-    bodyLight:  Color(0xFF2D2D42),
-    bodyMid:    Color(0xFF1E1E32),
-    bodyDark:   Color(0xFF0F0F1A),
-    accent:     Color(0xFF4285F4),
-    roofLight:  Color(0xFF3A3A56),
-    roofDark:   Color(0xFF22223A),
-  ),
-  VehicleState.enRoute: _Palette(
-    bodyLight:  Color(0xFF1B5E20),
-    bodyMid:    Color(0xFF2E7D32),
-    bodyDark:   Color(0xFF1B5E20),
-    accent:     Color(0xFF66BB6A),
-    roofLight:  Color(0xFF43A047),
-    roofDark:   Color(0xFF2E7D32),
-  ),
-  VehicleState.arrived: _Palette(
-    bodyLight:  Color(0xFFF57F17),
-    bodyMid:    Color(0xFFF9A825),
-    bodyDark:   Color(0xFFF57F17),
-    accent:     Color(0xFFFDD835),
-    roofLight:  Color(0xFFFBC02D),
-    roofDark:   Color(0xFFF9A825),
-  ),
-  VehicleState.inProgress: _Palette(
-    bodyLight:  Color(0xFF2D2D42),
-    bodyMid:    Color(0xFF1E1E32),
-    bodyDark:   Color(0xFF0F0F1A),
-    accent:     Color(0xFF4285F4),
-    roofLight:  Color(0xFF3A3A56),
-    roofDark:   Color(0xFF22223A),
-  ),
+const _accents = <VehicleState, _Acc>{
+  VehicleState.available:  _Acc(Color(0xFF4285F4), Color(0x404285F4)),
+  VehicleState.enRoute:    _Acc(Color(0xFF34A853), Color(0x4034A853)),
+  VehicleState.arrived:    _Acc(Color(0xFFFFA000), Color(0x40FFA000)),
+  VehicleState.inProgress: _Acc(Color(0xFF1A73E8), Color(0x401A73E8)),
 };
 
-// ══════════════════════════════════════════════════════════════════════════
-//  SPRITE CACHE  –  Pre-renders 16 angles per (zoom-bucket, state) combo
-// ══════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
+//  SPRITE CACHE  –  16 angles × zoom-bucket × state
+// ═══════════════════════════════════════════════════════════════════════════
 
-/// Global cache:  key = "$bucket-$stateIndex-$angleSlot"
 final Map<String, BitmapDescriptor> _spriteCache = {};
-
-/// Number of discrete angles pre-rendered.  16 → every 22.5°.
 const int _angleSlots = 16;
 
-/// Returns the [BitmapDescriptor] for a vehicle at the given [heading]°,
-/// [zoom] level and visual [state].  Uses a 16-angle sprite cache.
 Future<BitmapDescriptor> getVehicleMarker({
   required double heading,
   double zoom = 14,
   VehicleState state = VehicleState.available,
   bool isDriverSelf = false,
 }) async {
-  final size  = carSizeForZoom(zoom);
   final bucket = zoom.round();
-  // Snap heading to nearest 22.5° slot
-  final slot  = ((heading % 360) / (360 / _angleSlots)).round() % _angleSlots;
-  final key   = '$bucket-${state.index}-$slot${isDriverSelf ? "-d" : ""}';
+  final slot = ((heading % 360) / (360 / _angleSlots)).round() % _angleSlots;
+  final key = '$bucket-${state.index}-$slot${isDriverSelf ? "-d" : ""}';
 
   if (_spriteCache.containsKey(key)) return _spriteCache[key]!;
 
+  final size = carSizeForZoom(zoom);
   final angle = slot * (360.0 / _angleSlots);
-  final bmp   = await _renderVehicle(
+  final bmp = await _renderVehicle(
     size: size,
     heading: angle,
     state: state,
@@ -128,12 +83,13 @@ Future<BitmapDescriptor> getVehicleMarker({
   return bmp;
 }
 
-/// Clears the sprite cache (call on memory pressure or when not needed).
 void clearVehicleCache() => _spriteCache.clear();
 
-// ══════════════════════════════════════════════════════════════════════════
-//  RENDERING ENGINE  –  Isometric 3/4-view premium sedan
-// ══════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
+//  RENDERING ENGINE  –  White metallic sedan, 3/4 top-down perspective
+//  Visible wheels, chrome trim, door handles, reflections on white body.
+//  NO ground shadow.  Transparent background.
+// ═══════════════════════════════════════════════════════════════════════════
 
 Future<BitmapDescriptor> _renderVehicle({
   required double size,
@@ -141,387 +97,396 @@ Future<BitmapDescriptor> _renderVehicle({
   required VehicleState state,
   required bool isDriverSelf,
 }) async {
-  final s = size * 2;  // 2× for Retina
-  final recorder = ui.PictureRecorder();
-  final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, s, s));
-  final c = s / 2;
-  final pal = _palettes[state]!;
+  final raw = size * 2.0;        // 2× for retina
+  final s = raw < 8 ? 8.0 : raw; // minimum 4×4 logical px
+  final rec = ui.PictureRecorder();
+  final canvas = Canvas(rec, Rect.fromLTWH(0, 0, s, s));
+  final acc = _accents[state]!;
+
+  // Car proportions (3/4 view: longer than wide)
+  final hw = s * 0.30;           // body half-width
+  final hh = s * 0.44;          // body half-height (front→back)
 
   canvas.save();
-  canvas.translate(c, c);
+  canvas.translate(s / 2, s / 2);
   canvas.rotate(heading * math.pi / 180);
-  canvas.translate(-c, -c);
 
-  final bw = s * 0.30;   // body half-width
-  final bh = s * 0.42;   // body half-height (3/4 view = shorter ratio)
-  final isoSkew = s * 0.04; // slight isometric offset
-
-  // ── Ambient shadow (soft, no hard edge) ──
-  canvas.drawOval(
-    Rect.fromCenter(
-      center: Offset(c + isoSkew * 0.5, c + s * 0.03),
-      width: bw * 2.2,
-      height: bh * 1.6,
-    ),
-    Paint()
-      ..color = const Color(0x38000000)
-      ..maskFilter = MaskFilter.blur(BlurStyle.normal, s * 0.045),
-  );
-
-  // ── Driver-self halo ring ──
+  // ── 1. Driver-self accent halo ──
   if (isDriverSelf) {
     canvas.drawCircle(
-      Offset(c, c),
+      Offset.zero,
       s * 0.46,
       Paint()
         ..shader = ui.Gradient.radial(
-          Offset(c, c),
-          s * 0.46,
-          [
-            pal.accent.withOpacity(0.0),
-            pal.accent.withOpacity(0.08),
-            pal.accent.withOpacity(0.18),
-            pal.accent.withOpacity(0.0),
-          ],
-          [0.0, 0.55, 0.78, 1.0],
+          Offset.zero, s * 0.46,
+          [acc.primary.withOpacity(0.0), acc.primary.withOpacity(0.22), acc.primary.withOpacity(0.0)],
+          [0.0, 0.72, 1.0],
         ),
     );
   }
 
-  // ── Main body ──
-  final body = _isometricBody(c, c, bw, bh, isoSkew);
-  canvas.drawPath(
-    body,
-    Paint()
-      ..shader = ui.Gradient.linear(
-        Offset(c - bw, c),
-        Offset(c + bw, c),
-        [pal.bodyDark, pal.bodyMid, pal.bodyLight, pal.bodyMid, pal.bodyDark],
-        [0.0, 0.2, 0.5, 0.8, 1.0],
-      ),
-  );
+  // ── 2. Wheels (drawn FIRST – body overlaps inner half) ──
+  for (final pos in [
+    Offset(-hw * 0.78, -hh * 0.50),  // front-left
+    Offset( hw * 0.78, -hh * 0.50),  // front-right
+    Offset(-hw * 0.76,  hh * 0.46),  // rear-left
+    Offset( hw * 0.76,  hh * 0.46),  // rear-right
+  ]) {
+    _drawWheel(canvas, pos.dx, pos.dy, hw * 0.17, hh * 0.10, s);
+  }
 
-  // Longitudinal reflection
-  canvas.drawPath(
-    body,
-    Paint()
-      ..shader = ui.Gradient.linear(
-        Offset(c, c - bh),
-        Offset(c, c + bh),
-        [
-          const Color(0x22FFFFFF),
-          const Color(0x08FFFFFF),
-          const Color(0x00000000),
-          const Color(0x06FFFFFF),
-        ],
-        [0.0, 0.25, 0.60, 1.0],
-      ),
-  );
+  // ── 3. Main body shell (white metallic) ──
+  final body = _bodyPath(hw, hh);
 
-  // ── Hood panel (darker) ──
-  final hood = Path()
-    ..moveTo(c - bw * 0.68, c - bh * 0.52)
-    ..quadraticBezierTo(c, c - bh * 0.60, c + bw * 0.68, c - bh * 0.52)
-    ..lineTo(c + bw * 0.62, c - bh * 0.30)
-    ..quadraticBezierTo(c, c - bh * 0.35, c - bw * 0.62, c - bh * 0.30)
+  // 3a. Base solid slate-gray (visible on light & dark map tiles)
+  canvas.drawPath(body, Paint()..color = const Color(0xFF4A5060));
+
+  // 3b. Side-to-side gradient for 3D volume (darker edges for depth)
+  canvas.drawPath(body, Paint()
+    ..shader = ui.Gradient.linear(
+      Offset(-hw, 0), Offset(hw, 0),
+      [const Color(0x30000000), const Color(0x00000000), const Color(0x10FFFFFF), const Color(0x00000000), const Color(0x28000000)],
+      [0.0, 0.22, 0.46, 0.74, 1.0],
+    ));
+
+  // 3c. Front-to-back gradient (lit from front)
+  canvas.drawPath(body, Paint()
+    ..shader = ui.Gradient.linear(
+      Offset(0, -hh), Offset(0, hh),
+      [const Color(0x18FFFFFF), const Color(0x08FFFFFF), const Color(0x00000000), const Color(0x14000000)],
+      [0.0, 0.30, 0.60, 1.0],
+    ));
+
+  // 3d. Metallic specular patch (upper-left)
+  canvas.drawPath(body, Paint()
+    ..shader = ui.Gradient.radial(
+      Offset(-hw * 0.25, -hh * 0.20), hw * 1.1,
+      [const Color(0x12FFFFFF), const Color(0x00FFFFFF)],
+    ));
+
+  // ── 4. Fender arch shadows (over wheel wells) ──
+  for (final side in [-1.0, 1.0]) {
+    for (final fb in [-0.50, 0.46]) {
+      canvas.drawOval(
+        Rect.fromCenter(
+          center: Offset(hw * 0.72 * side, hh * fb),
+          width: hw * 0.40, height: hh * 0.24,
+        ),
+        Paint()
+          ..color = const Color(0x0E000000)
+          ..maskFilter = MaskFilter.blur(BlurStyle.normal, s * 0.010),
+      );
+    }
+  }
+
+  // ── 5. Hood panel (front) ──
+  final hoodP = Path()
+    ..moveTo(-hw * 0.66, -hh * 0.36)
+    ..quadraticBezierTo(0, -hh * 0.40, hw * 0.66, -hh * 0.36)
+    ..lineTo(hw * 0.56, -hh * 0.62)
+    ..quadraticBezierTo(0, -hh * 0.68, -hw * 0.56, -hh * 0.62)
     ..close();
-  canvas.drawPath(hood, Paint()..color = const Color(0x28000000));
-
-  // Hood chrome accent line
+  canvas.drawPath(hoodP, Paint()
+    ..shader = ui.Gradient.linear(
+      Offset(0, -hh * 0.68), Offset(0, -hh * 0.36),
+      [const Color(0x08000010), const Color(0x00000000)],
+    ));
+  // Hood centre crease
   canvas.drawLine(
-    Offset(c - bw * 0.50, c - bh * 0.52),
-    Offset(c + bw * 0.50, c - bh * 0.52),
-    Paint()
-      ..color = const Color(0x25FFFFFF)
-      ..strokeWidth = s * 0.004
-      ..strokeCap = StrokeCap.round,
+    Offset(0, -hh * 0.63), Offset(0, -hh * 0.40),
+    Paint()..color = const Color(0x14000020)..strokeWidth = s * 0.004..strokeCap = StrokeCap.round,
   );
 
-  // ── Front windshield (tinted, with reflection) ──
-  _drawWindshield(
-    canvas, c, c - bh * 0.28,
-    bw * 0.56, bh * 0.13,
-    bw * 0.08,
-    isRear: false,
-  );
-
-  // ── Rear windshield ──
-  _drawWindshield(
-    canvas, c, c + bh * 0.22,
-    bw * 0.48, bh * 0.10,
-    bw * 0.06,
-    isRear: true,
-  );
-
-  // ── Roof ──
+  // ── 6. Front grille (thin dark slot) ──
   canvas.drawRRect(
     RRect.fromRectAndRadius(
-      Rect.fromCenter(
-        center: Offset(c, c - bh * 0.04),
-        width: bw * 1.02,
-        height: bh * 0.30,
+      Rect.fromCenter(center: Offset(0, -hh * 0.75), width: hw * 0.68, height: hh * 0.024),
+      Radius.circular(hh * 0.012),
+    ),
+    Paint()..color = const Color(0xFF333340),
+  );
+
+  // ── 7. Trunk panel (rear) ──
+  final trunkP = Path()
+    ..moveTo(-hw * 0.60, hh * 0.40)
+    ..quadraticBezierTo(0, hh * 0.44, hw * 0.60, hh * 0.40)
+    ..lineTo(hw * 0.48, hh * 0.62)
+    ..quadraticBezierTo(0, hh * 0.68, -hw * 0.48, hh * 0.62)
+    ..close();
+  canvas.drawPath(trunkP, Paint()..color = const Color(0x0A000008));
+
+  // ── 8. Front windshield (dark tinted glass with reflection) ──
+  canvas.drawRRect(
+    RRect.fromRectAndRadius(
+      Rect.fromCenter(center: Offset(0, -hh * 0.20), width: hw * 1.18, height: hh * 0.22),
+      Radius.circular(hw * 0.10),
+    ),
+    Paint()
+      ..shader = ui.Gradient.linear(
+        Offset(0, -hh * 0.31), Offset(0, -hh * 0.09),
+        [const Color(0xFF18232E), const Color(0xFF2C3C4E)],
       ),
-      Radius.circular(bw * 0.14),
+  );
+  // Reflection streak on windshield
+  canvas.drawRRect(
+    RRect.fromRectAndRadius(
+      Rect.fromCenter(center: Offset(-hw * 0.18, -hh * 0.22), width: hw * 0.55, height: hh * 0.035),
+      Radius.circular(hw * 0.06),
+    ),
+    Paint()..color = const Color(0x30FFFFFF),
+  );
+  // Chrome trim around windshield
+  canvas.drawRRect(
+    RRect.fromRectAndRadius(
+      Rect.fromCenter(center: Offset(0, -hh * 0.20), width: hw * 1.22, height: hh * 0.24),
+      Radius.circular(hw * 0.11),
+    ),
+    Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = s * 0.003
+      ..color = const Color(0x30FFFFFF),
+  );
+
+  // ── 9. Rear windshield ──
+  canvas.drawRRect(
+    RRect.fromRectAndRadius(
+      Rect.fromCenter(center: Offset(0, hh * 0.24), width: hw * 0.96, height: hh * 0.16),
+      Radius.circular(hw * 0.08),
+    ),
+    Paint()
+      ..shader = ui.Gradient.linear(
+        Offset(0, hh * 0.16), Offset(0, hh * 0.32),
+        [const Color(0xFF2C3C4E), const Color(0xFF18232E)],
+      ),
+  );
+
+  // ── 10. Roof (raised, slightly lighter gray with sky reflection) ──
+  canvas.drawRRect(
+    RRect.fromRectAndRadius(
+      Rect.fromCenter(center: Offset(0, -hh * 0.01), width: hw * 0.90, height: hh * 0.30),
+      Radius.circular(hw * 0.16),
     ),
     Paint()
       ..shader = ui.Gradient.radial(
-        Offset(c - bw * 0.12, c - bh * 0.09),
-        bw * 0.65,
-        [pal.roofLight, pal.roofDark],
+        Offset(-hw * 0.10, -hh * 0.06), hw * 0.65,
+        [const Color(0xFF687080), const Color(0xFF556068)],
       ),
   );
-
   // Roof specular highlight
   canvas.drawRRect(
     RRect.fromRectAndRadius(
-      Rect.fromCenter(
-        center: Offset(c - bw * 0.10, c - bh * 0.08),
-        width: bw * 0.42,
-        height: bh * 0.08,
-      ),
-      Radius.circular(bw * 0.21),
+      Rect.fromCenter(center: Offset(-hw * 0.08, -hh * 0.05), width: hw * 0.38, height: hh * 0.08),
+      Radius.circular(hw * 0.20),
     ),
-    Paint()..color = const Color(0x1AFFFFFF),
+    Paint()..color = const Color(0x20FFFFFF),
   );
 
-  // ── Headlights (LED strip) ──
-  for (final dx in [-1.0, 1.0]) {
-    final hx = c + bw * 0.48 * dx;
-    final hy = c - bh * 0.55;
+  // ── 11. Side windows (dark glass strips) ──
+  for (final side in [-1.0, 1.0]) {
+    final wp = Path()
+      ..moveTo(hw * 0.54 * side, -hh * 0.28)
+      ..quadraticBezierTo(hw * 0.58 * side, -hh * 0.03, hw * 0.52 * side, hh * 0.20)
+      ..lineTo(hw * 0.46 * side, hh * 0.18)
+      ..quadraticBezierTo(hw * 0.50 * side, -hh * 0.03, hw * 0.46 * side, -hh * 0.26)
+      ..close();
+    canvas.drawPath(wp, Paint()..color = const Color(0xCC1A2636));
+  }
+
+  // ── 12. Headlights (warm white LED strips) ──
+  for (final side in [-1.0, 1.0]) {
+    final hx = hw * 0.50 * side;
+    final hy = -hh * 0.68;
     // Glow
     canvas.drawOval(
-      Rect.fromCenter(center: Offset(hx, hy), width: bw * 0.34, height: bh * 0.05),
+      Rect.fromCenter(center: Offset(hx, hy), width: hw * 0.30, height: hh * 0.06),
       Paint()
         ..shader = ui.Gradient.radial(
-          Offset(hx, hy), bw * 0.18,
-          [const Color(0xBBFFFFFF), const Color(0x00FFFFFF)],
+          Offset(hx, hy), hw * 0.16,
+          [const Color(0x88FFFFF0), const Color(0x00FFFFF0)],
         ),
     );
     // LED bar
     canvas.drawRRect(
       RRect.fromRectAndRadius(
-        Rect.fromCenter(center: Offset(hx, hy), width: bw * 0.22, height: bh * 0.025),
-        Radius.circular(bh * 0.013),
+        Rect.fromCenter(center: Offset(hx, hy), width: hw * 0.22, height: hh * 0.022),
+        Radius.circular(hh * 0.011),
       ),
-      Paint()..color = const Color(0xFFF0F4FF),
+      Paint()..color = const Color(0xFFF8F8F0),
     );
   }
 
-  // ── Taillights (LED red) ──
-  for (final dx in [-1.0, 1.0]) {
-    final tx = c + bw * 0.46 * dx;
-    final ty = c + bh * 0.55;
-    // Glow
+  // ── 13. Taillights (subtle red LED strips) ──
+  for (final side in [-1.0, 1.0]) {
+    final tx = hw * 0.46 * side;
+    final ty = hh * 0.64;
+    // Red glow
     canvas.drawOval(
-      Rect.fromCenter(center: Offset(tx, ty), width: bw * 0.30, height: bh * 0.04),
+      Rect.fromCenter(center: Offset(tx, ty), width: hw * 0.26, height: hh * 0.05),
       Paint()
         ..shader = ui.Gradient.radial(
-          Offset(tx, ty), bw * 0.16,
-          [const Color(0xBBFF2222), const Color(0x00FF2222)],
+          Offset(tx, ty), hw * 0.14,
+          [const Color(0x88FF1818), const Color(0x00FF1818)],
         ),
     );
     // LED bar
     canvas.drawRRect(
       RRect.fromRectAndRadius(
-        Rect.fromCenter(center: Offset(tx, ty), width: bw * 0.20, height: bh * 0.022),
-        Radius.circular(bh * 0.011),
+        Rect.fromCenter(center: Offset(tx, ty), width: hw * 0.20, height: hh * 0.020),
+        Radius.circular(hh * 0.010),
       ),
       Paint()..color = const Color(0xFFEE2020),
     );
   }
 
-  // ── Wheels (rubber + alloy + spokes) ──
-  for (final fy in [-0.32, 0.30]) {
-    for (final fx in [-1.0, 1.0]) {
-      _drawWheel(canvas, c + bw * 0.88 * fx, c + bh * fy, bw * 0.16, bh * 0.10, s);
-    }
-  }
-
-  // ── Side mirrors ──
-  for (final dx in [-1.0, 1.0]) {
-    final mx = c + bw * 0.92 * dx;
-    final my = c - bh * 0.22;
+  // ── 14. Side mirrors (body-matched ovals) ──
+  for (final side in [-1.0, 1.0]) {
+    final mx = hw * 0.98 * side;
+    final my = -hh * 0.22;
     canvas.drawOval(
-      Rect.fromCenter(center: Offset(mx, my), width: bw * 0.14, height: bh * 0.045),
+      Rect.fromCenter(center: Offset(mx, my), width: hw * 0.13, height: hh * 0.055),
       Paint()
         ..shader = ui.Gradient.linear(
-          Offset(mx - bw * 0.05, my),
-          Offset(mx + bw * 0.05, my),
-          [const Color(0xFF555566), const Color(0xFFBBBBCC), const Color(0xFF555566)],
+          Offset(mx - hw * 0.05, my), Offset(mx + hw * 0.05, my),
+          [const Color(0xFF3A4050), const Color(0xFF606878), const Color(0xFF3A4050)],
           [0.0, 0.5, 1.0],
         ),
     );
   }
 
-  // ── Door seams ──
-  final seam = Paint()
-    ..color = const Color(0x14000000)
-    ..strokeWidth = s * 0.003
-    ..style = PaintingStyle.stroke;
-  for (final dx in [-1.0, 1.0]) {
+  // ── 15. Door handles (tiny chrome rectangles) ──
+  for (final side in [-1.0, 1.0]) {
+    for (final yf in [-0.08, 0.10]) {
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromCenter(
+            center: Offset(hw * 0.72 * side, hh * yf),
+            width: hw * 0.08, height: hh * 0.016,
+          ),
+          Radius.circular(hh * 0.008),
+        ),
+        Paint()..color = const Color(0xFF8890A0),
+      );
+    }
+  }
+
+  // ── 16. Belt-line chrome trim (cabin perimeter) ──
+  final beltP = Path()
+    ..moveTo(-hw * 0.56, -hh * 0.30)
+    ..quadraticBezierTo(0, -hh * 0.33, hw * 0.56, -hh * 0.30)
+    ..quadraticBezierTo(hw * 0.60, -hh * 0.02, hw * 0.54, hh * 0.22)
+    ..quadraticBezierTo(0, hh * 0.25, -hw * 0.54, hh * 0.22)
+    ..quadraticBezierTo(-hw * 0.60, -hh * 0.02, -hw * 0.56, -hh * 0.30);
+  canvas.drawPath(beltP, Paint()
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = s * 0.004
+    ..color = const Color(0x30FFFFFF));
+
+  // ── 17. Body character lines (side creases) ──
+  for (final side in [-1.0, 1.0]) {
     canvas.drawLine(
-      Offset(c + bw * 0.78 * dx, c - bh * 0.14),
-      Offset(c + bw * 0.78 * dx, c + bh * 0.18),
-      seam,
+      Offset(hw * 0.80 * side, -hh * 0.42),
+      Offset(hw * 0.78 * side, hh * 0.38),
+      Paint()..color = const Color(0x18000020)..strokeWidth = s * 0.003..strokeCap = StrokeCap.round,
     );
   }
 
-  // ── Centre ridge (subtle) ──
-  canvas.drawLine(
-    Offset(c, c - bh * 0.50),
-    Offset(c, c + bh * 0.50),
-    Paint()
-      ..color = const Color(0x0AFFFFFF)
-      ..strokeWidth = s * 0.004,
+  // ── 18. B-pillar (door divider) ──
+  for (final side in [-1.0, 1.0]) {
+    canvas.drawLine(
+      Offset(hw * 0.52 * side, -hh * 0.02),
+      Offset(hw * 0.50 * side, hh * 0.06),
+      Paint()..color = const Color(0x14000000)..strokeWidth = s * 0.003..strokeCap = StrokeCap.round,
+    );
+  }
+
+  // ── 19. Body edge highlight (chrome outline) ──
+  canvas.drawPath(body, Paint()
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = s * 0.005
+    ..shader = ui.Gradient.linear(
+      Offset(-hw, -hh * 0.3), Offset(hw, hh * 0.3),
+      [const Color(0x00FFFFFF), const Color(0x28FFFFFF), const Color(0x00FFFFFF)],
+      [0.0, 0.45, 1.0],
+    ),
   );
 
-  // ── Direction indicator (small chevron at front) ──
+  // ── 20. Direction indicator (driver self only) ──
   if (isDriverSelf) {
-    final ay = c - bh * 0.62;
-    final chevron = Path()
-      ..moveTo(c, ay - s * 0.035)
-      ..lineTo(c - s * 0.028, ay + s * 0.012)
-      ..lineTo(c, ay)
-      ..lineTo(c + s * 0.028, ay + s * 0.012)
-      ..close();
+    final ay = -hh * 0.78;
     canvas.drawPath(
-      chevron,
-      Paint()..color = pal.accent.withOpacity(0.75),
+      Path()
+        ..moveTo(0, ay - s * 0.04)
+        ..lineTo(-s * 0.024, ay + s * 0.01)
+        ..lineTo(0, ay - s * 0.005)
+        ..lineTo(s * 0.024, ay + s * 0.01)
+        ..close(),
+      Paint()..color = acc.primary.withOpacity(0.85),
     );
   }
 
   canvas.restore();
 
   // Rasterise
-  final picture = recorder.endRecording();
-  final img = await picture.toImage(s.toInt(), s.toInt());
-  final byteData = await img.toByteData(format: ui.ImageByteFormat.png);
-  img.dispose();
-
-  if (byteData != null) {
-    return BitmapDescriptor.bytes(
-      byteData.buffer.asUint8List(),
-      imagePixelRatio: 2.0,
-    );
+  final pic = rec.endRecording();
+  try {
+    final img = await pic.toImage(s.toInt(), s.toInt());
+    final data = await img.toByteData(format: ui.ImageByteFormat.png);
+    img.dispose();
+    if (data != null) {
+      return BitmapDescriptor.bytes(data.buffer.asUint8List(), imagePixelRatio: 2.0);
+    }
+  } catch (_) {
+    // toImage can fail on very low zoom / tiny canvas – fall back gracefully
   }
   return BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue);
 }
 
-// ══════════════════════════════════════════════════════════════════════════
-//  GEOMETRY  –  Isometric sedan body
-// ══════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
+//  GEOMETRY  –  Sedan body outline (smooth, 3/4 perspective feel)
+// ═══════════════════════════════════════════════════════════════════════════
 
-Path _isometricBody(double cx, double cy, double hw, double hh, double iso) {
+/// Sedan body path.  Origin at (0,0) = centre.  Front = negative Y.
+Path _bodyPath(double hw, double hh) {
   return Path()
-    // Front nose (tapered)
-    ..moveTo(cx - hw * 0.54, cy - hh * 0.46)
-    ..cubicTo(
-      cx - hw * 0.58, cy - hh * 0.56,
-      cx - hw * 0.26, cy - hh * 0.62,
-      cx, cy - hh * 0.64,
-    )
-    ..cubicTo(
-      cx + hw * 0.26, cy - hh * 0.62,
-      cx + hw * 0.58, cy - hh * 0.56,
-      cx + hw * 0.54, cy - hh * 0.46,
-    )
-    // Right flank (fender bulge)
-    ..cubicTo(
-      cx + hw * 0.84, cy - hh * 0.36,
-      cx + hw * 0.88, cy - hh * 0.08,
-      cx + hw * 0.86, cy + hh * 0.12,
-    )
-    ..cubicTo(
-      cx + hw * 0.88, cy + hh * 0.32,
-      cx + hw * 0.84, cy + hh * 0.42,
-      cx + hw * 0.54, cy + hh * 0.48,
-    )
-    // Rear (rounded)
-    ..cubicTo(
-      cx + hw * 0.26, cy + hh * 0.58,
-      cx + hw * 0.12, cy + hh * 0.60,
-      cx, cy + hh * 0.60,
-    )
-    ..cubicTo(
-      cx - hw * 0.12, cy + hh * 0.60,
-      cx - hw * 0.26, cy + hh * 0.58,
-      cx - hw * 0.54, cy + hh * 0.48,
-    )
-    // Left flank
-    ..cubicTo(
-      cx - hw * 0.84, cy + hh * 0.42,
-      cx - hw * 0.88, cy + hh * 0.32,
-      cx - hw * 0.86, cy + hh * 0.12,
-    )
-    ..cubicTo(
-      cx - hw * 0.88, cy - hh * 0.08,
-      cx - hw * 0.84, cy - hh * 0.36,
-      cx - hw * 0.54, cy - hh * 0.46,
-    )
+    // Front nose (narrow, aero-rounded)
+    ..moveTo(-hw * 0.38, -hh * 0.72)
+    ..cubicTo(-hw * 0.42, -hh * 0.82, -hw * 0.14, -hh * 0.92, 0, -hh * 0.92)
+    ..cubicTo( hw * 0.14, -hh * 0.92,  hw * 0.42, -hh * 0.82, hw * 0.38, -hh * 0.72)
+    // Right front fender (widens)
+    ..cubicTo(hw * 0.72, -hh * 0.62, hw * 0.88, -hh * 0.44, hw * 0.90, -hh * 0.20)
+    // Right side (slight belly curve)
+    ..cubicTo(hw * 0.92, hh * 0.05, hw * 0.92, hh * 0.25, hw * 0.88, hh * 0.42)
+    // Right rear fender
+    ..cubicTo(hw * 0.84, hh * 0.56, hw * 0.68, hh * 0.68, hw * 0.38, hh * 0.74)
+    // Rear (slightly squared)
+    ..cubicTo(hw * 0.16, hh * 0.80, hw * 0.06, hh * 0.82, 0, hh * 0.82)
+    ..cubicTo(-hw * 0.06, hh * 0.82, -hw * 0.16, hh * 0.80, -hw * 0.38, hh * 0.74)
+    // Left rear fender
+    ..cubicTo(-hw * 0.68, hh * 0.68, -hw * 0.84, hh * 0.56, -hw * 0.88, hh * 0.42)
+    // Left side
+    ..cubicTo(-hw * 0.92, hh * 0.25, -hw * 0.92, hh * 0.05, -hw * 0.90, -hh * 0.20)
+    // Left front fender
+    ..cubicTo(-hw * 0.88, -hh * 0.44, -hw * 0.72, -hh * 0.62, -hw * 0.38, -hh * 0.72)
     ..close();
 }
 
-void _drawWindshield(
-  Canvas canvas, double cx, double cy, double hw, double hh, double r,
-  {required bool isRear}
-) {
-  final rrect = RRect.fromRectAndRadius(
-    Rect.fromCenter(center: Offset(cx, cy), width: hw * 2, height: hh * 2),
-    Radius.circular(r),
+/// Realistic wheel: dark rubber tyre, metallic alloy rim, chrome hub-cap.
+void _drawWheel(Canvas c, double cx, double cy, double rw, double rh, double s) {
+  // Rubber tyre
+  c.drawOval(
+    Rect.fromCenter(center: Offset(cx, cy), width: rw * 2, height: rh * 2),
+    Paint()..color = const Color(0xFF1A1A22),
   );
-  // Tinted glass
-  canvas.drawRRect(
-    rrect,
+  // Alloy rim (metallic gradient)
+  c.drawOval(
+    Rect.fromCenter(center: Offset(cx, cy), width: rw * 1.30, height: rh * 1.30),
     Paint()
       ..shader = ui.Gradient.linear(
-        Offset(cx, cy - hh),
-        Offset(cx, cy + hh),
-        isRear
-            ? [const Color(0xFF1A2636), const Color(0xFF2A3A50)]
-            : [const Color(0xFF2A3A50), const Color(0xFF1A2636)],
-      ),
-  );
-  // Sky reflection band
-  canvas.drawRRect(
-    RRect.fromRectAndRadius(
-      Rect.fromCenter(
-        center: Offset(cx - hw * 0.22, cy - hh * 0.30),
-        width: hw * 0.55,
-        height: hh * 0.35,
-      ),
-      Radius.circular(r * 0.5),
-    ),
-    Paint()..color = const Color(0x1CFFFFFF),
-  );
-}
-
-void _drawWheel(Canvas canvas, double cx, double cy, double hw, double hh, double s) {
-  // Tire (dark rubber)
-  canvas.drawRRect(
-    RRect.fromRectAndRadius(
-      Rect.fromCenter(center: Offset(cx, cy), width: hw * 2, height: hh * 2),
-      Radius.circular(hw * 0.42),
-    ),
-    Paint()..color = const Color(0xFF111118),
-  );
-  // Alloy rim
-  canvas.drawRRect(
-    RRect.fromRectAndRadius(
-      Rect.fromCenter(center: Offset(cx, cy), width: hw * 1.25, height: hh * 1.25),
-      Radius.circular(hw * 0.38),
-    ),
-    Paint()
-      ..shader = ui.Gradient.linear(
-        Offset(cx - hw * 0.3, cy),
-        Offset(cx + hw * 0.3, cy),
-        [const Color(0xFF444455), const Color(0xFFAAAABB), const Color(0xFF444455)],
+        Offset(cx - rw * 0.35, cy), Offset(cx + rw * 0.35, cy),
+        [const Color(0xFF505060), const Color(0xFFBBBBCC), const Color(0xFF505060)],
         [0.0, 0.5, 1.0],
       ),
   );
-  // Centre hub
-  canvas.drawCircle(
-    Offset(cx, cy),
-    hw * 0.22,
-    Paint()..color = const Color(0xFF666677),
-  );
+  // Chrome centre cap
+  c.drawCircle(Offset(cx, cy), rw * 0.25, Paint()..color = const Color(0xFF888899));
 }

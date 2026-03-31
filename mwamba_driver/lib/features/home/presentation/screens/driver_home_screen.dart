@@ -17,6 +17,7 @@ import '../../../../core/services/driver_status_notifier.dart';
 import '../../../../core/services/ride_request_notifier.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/constants/app_strings.dart';
+import '../../../../core/utils/vehicle_asset_marker.dart';
 import '../../../../core/widgets/app_alert.dart';
 
 class DriverHomeScreen extends StatefulWidget {
@@ -32,10 +33,13 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
   final RideRequestNotifier _rideRequestNotifier = getIt<RideRequestNotifier>();
   GoogleMapController? _mapController;
   LatLng _currentPosition = const LatLng(-4.3250, 15.3222);
+  double _heading = 0;
+  BitmapDescriptor? _carIcon;
   bool get _isOnline => _statusNotifier.value;
   bool _toggling = false;
   StreamSubscription<Position>? _positionSub;
   WebSocketChannel? _ws;
+  Timer? _heartbeatTimer;
 
   Map<String, dynamic>? _pendingRequest;
   int _requestCountdown = 15;
@@ -48,6 +52,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     _statusNotifier.addListener(_onStatusChanged);
     _initLocation();
     _loadInitialStatus();
+    _loadCarIcon();
   }
 
   void _onStatusChanged() {
@@ -68,6 +73,16 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     } catch (_) {}
   }
 
+  Future<void> _loadCarIcon() async {
+    _carIcon = await getVehicleMarker(
+      heading: _heading,
+      zoom: 15,
+      state: VehicleState.available,
+      isDriverSelf: true,
+    );
+    if (mounted) setState(() {});
+  }
+
   Future<void> _initLocation() async {
     final permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
@@ -86,21 +101,41 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     setState(() => _toggling = true);
     try {
       final goOnline = !_isOnline;
-      await _api.dio.post(
-        ApiConstants.updateStatus,
-        data: {'is_online': goOnline},
-      );
-      _statusNotifier.value = goOnline;
 
-      if (_isOnline) {
-        // Send current location immediately so backend has it
-        _api.dio.post(ApiConstants.updateLocation, data: {
+      if (goOnline) {
+        // 1. Get fresh GPS position FIRST
+        try {
+          final pos = await Geolocator.getCurrentPosition(
+            desiredAccuracy: LocationAccuracy.high,
+          ).timeout(const Duration(seconds: 5));
+          _currentPosition = LatLng(pos.latitude, pos.longitude);
+          _heading = pos.heading;
+        } catch (_) {
+          // Use last known position if GPS is slow
+        }
+
+        // 2. Send position to backend BEFORE going online
+        await _api.dio.post(ApiConstants.updateLocation, data: {
           'latitude': _currentPosition.latitude,
           'longitude': _currentPosition.longitude,
-        }).ignore();
+        });
+
+        // 3. Now toggle online — backend will check for pending rides
+        await _api.dio.post(
+          ApiConstants.updateStatus,
+          data: {'is_online': true},
+        );
+        _statusNotifier.value = true;
+
+        // 4. Start continuous location + WebSocket immediately
         _startLocationUpdates();
         _connectWebSocket();
       } else {
+        await _api.dio.post(
+          ApiConstants.updateStatus,
+          data: {'is_online': false},
+        );
+        _statusNotifier.value = false;
         _stopLocationUpdates();
         _disconnectWebSocket();
       }
@@ -125,16 +160,40 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     _positionSub = Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
         accuracy: LocationAccuracy.high,
-        distanceFilter: 20,
+        distanceFilter: 10,
       ),
-    ).listen((pos) {
-      setState(() => _currentPosition = LatLng(pos.latitude, pos.longitude));
+    ).listen((pos) async {
+      final newPos = LatLng(pos.latitude, pos.longitude);
+      _heading = pos.heading;
+      _currentPosition = newPos;
+      _carIcon = await getVehicleMarker(
+        heading: _heading,
+        zoom: 15,
+        state: VehicleState.available,
+        isDriverSelf: true,
+      );
+      if (mounted) setState(() {});
       _mapController?.animateCamera(CameraUpdate.newLatLng(_currentPosition));
+
+      // Send via REST (reliable, persisted in DB)
       _api.dio.post(ApiConstants.updateLocation, data: {
         'latitude': pos.latitude,
         'longitude': pos.longitude,
       }).ignore();
+
+      // Also send via WebSocket (faster, for real-time matching)
+      _sendLocationViaWs(pos.latitude, pos.longitude);
     });
+  }
+
+  void _sendLocationViaWs(double lat, double lng) {
+    try {
+      _ws?.sink.add(jsonEncode({
+        'type': 'location_update',
+        'latitude': lat,
+        'longitude': lng,
+      }));
+    } catch (_) {}
   }
 
   void _stopLocationUpdates() {
@@ -147,10 +206,24 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     if (token == null) return;
 
     try { _ws?.sink.close(); } catch (_) {}
+    _heartbeatTimer?.cancel();
 
     _ws = WebSocketChannel.connect(
       Uri.parse('${ApiConstants.wsBaseUrl}/driver/?token=$token'),
     );
+
+    // Start heartbeat to keep connection alive & detect dead sockets
+    _heartbeatTimer = Timer.periodic(const Duration(seconds: 25), (_) {
+      try {
+        _ws?.sink.add(jsonEncode({'type': 'heartbeat'}));
+      } catch (_) {
+        // If sending fails, reconnect
+        _heartbeatTimer?.cancel();
+        if (_isOnline && mounted) {
+          Future.delayed(const Duration(seconds: 1), _connectWebSocket);
+        }
+      }
+    });
 
     _ws!.stream.listen(
       (data) {
@@ -173,19 +246,26 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
         }
       },
       onDone: () {
+        _heartbeatTimer?.cancel();
         if (_isOnline && mounted) {
-          Future.delayed(const Duration(seconds: 3), _connectWebSocket);
+          Future.delayed(const Duration(seconds: 1), _connectWebSocket);
         }
       },
       onError: (_) {
+        _heartbeatTimer?.cancel();
         if (_isOnline && mounted) {
-          Future.delayed(const Duration(seconds: 3), _connectWebSocket);
+          Future.delayed(const Duration(seconds: 1), _connectWebSocket);
         }
       },
     );
+
+    // Send initial location via WebSocket so backend has it immediately
+    _sendLocationViaWs(_currentPosition.latitude, _currentPosition.longitude);
   }
 
   void _disconnectWebSocket() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
     _ws?.sink.close();
     _ws = null;
   }
@@ -248,6 +328,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
     _stopLocationUpdates();
     _disconnectWebSocket();
     _requestTimer?.cancel();
+    _heartbeatTimer?.cancel();
     _mapController?.dispose();
     super.dispose();
   }
@@ -264,10 +345,22 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> {
               zoom: 15,
             ),
             onMapCreated: (c) => _mapController = c,
-            myLocationEnabled: true,
+            myLocationEnabled: false,
             myLocationButtonEnabled: false,
             zoomControlsEnabled: false,
             mapToolbarEnabled: false,
+            markers: _carIcon != null
+                ? {
+                    Marker(
+                      markerId: const MarkerId('driver_self'),
+                      position: _currentPosition,
+                      icon: _carIcon!,
+                      anchor: const Offset(0.5, 0.5),
+                      flat: true,
+                      zIndex: 3,
+                    ),
+                  }
+                : {},
           ),
 
           // Top bar with status badge

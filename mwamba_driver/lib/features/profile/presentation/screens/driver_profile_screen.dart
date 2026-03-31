@@ -2,6 +2,7 @@
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:go_router/go_router.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../../core/constants/api_constants.dart';
 import '../../../../core/di/injection.dart';
@@ -9,6 +10,7 @@ import '../../../../core/network/api_client.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/constants/app_strings.dart';
 import '../../../../core/widgets/app_alert.dart';
+import '../../../auth/presentation/bloc/auth_bloc.dart';
 
 class DriverProfileScreen extends StatefulWidget {
   const DriverProfileScreen({super.key});
@@ -22,11 +24,26 @@ class _DriverProfileScreenState extends State<DriverProfileScreen> {
   Map<String, dynamic>? _profile;
   Map<String, dynamic>? _driverProfile;
   bool _loading = true;
+  String _sessionRemaining = '';
 
   @override
   void initState() {
     super.initState();
     _load();
+    _loadSessionInfo();
+  }
+
+  Future<void> _loadSessionInfo() async {
+    final remaining = await _api.remainingSession();
+    if (mounted) {
+      setState(() {
+        final days = remaining.inDays;
+        final hours = remaining.inHours % 24;
+        _sessionRemaining = days > 0
+            ? '$days j ${hours} h restants'
+            : '${hours} h restantes';
+      });
+    }
   }
 
   Future<void> _load() async {
@@ -54,7 +71,7 @@ class _DriverProfileScreenState extends State<DriverProfileScreen> {
   }
 
   Future<void> _logout() async {
-    await _api.clearTokens();
+    context.read<AuthBloc>().add(LogoutEvent());
     if (mounted) context.go('/welcome');
   }
 
@@ -176,14 +193,14 @@ class _DriverProfileScreenState extends State<DriverProfileScreen> {
                       delegate: SliverChildListDelegate([
                         // Stats row
                         Container(
-                          padding: EdgeInsets.symmetric(vertical: 16.h),
+                          padding: EdgeInsets.symmetric(vertical: 18.h, horizontal: 8.w),
                           decoration: BoxDecoration(
                             color: Colors.white,
                             borderRadius: BorderRadius.circular(20.r),
                             boxShadow: [
                               BoxShadow(
-                                color: Colors.black.withOpacity(0.04),
-                                blurRadius: 12,
+                                color: Colors.black.withOpacity(0.05),
+                                blurRadius: 16,
                                 offset: const Offset(0, 4),
                               ),
                             ],
@@ -242,6 +259,13 @@ class _DriverProfileScreenState extends State<DriverProfileScreen> {
                         _SectionTitle(title: 'Param\u00e8tres'),
                         SizedBox(height: 8.h),
                         _SettingsTile(
+                          icon: Icons.timer_outlined,
+                          label: 'Session',
+                          trailing: _sessionRemaining.isNotEmpty
+                              ? _sessionRemaining
+                              : 'Chargement...',
+                        ),
+                        _SettingsTile(
                           icon: Icons.language_rounded,
                           label: 'Langue',
                           trailing: 'Fran\u00e7ais',
@@ -259,18 +283,30 @@ class _DriverProfileScreenState extends State<DriverProfileScreen> {
                         SizedBox(height: 24.h),
 
                         // Logout
-                        OutlinedButton.icon(
-                          onPressed: _logout,
-                          icon: const Icon(Icons.logout, color: AppColors.error),
-                          label: const Text(
-                            AppStrings.logout,
-                            style: TextStyle(color: AppColors.error),
-                          ),
-                          style: OutlinedButton.styleFrom(
-                            side: const BorderSide(color: AppColors.error),
-                            minimumSize: Size(double.infinity, 50.h),
-                            shape: RoundedRectangleBorder(
+                        GestureDetector(
+                          onTap: _logout,
+                          child: Container(
+                            width: double.infinity,
+                            height: 50.h,
+                            decoration: BoxDecoration(
+                              color: AppColors.error.withOpacity(0.06),
                               borderRadius: BorderRadius.circular(14.r),
+                              border: Border.all(color: AppColors.error.withOpacity(0.2)),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.logout, color: AppColors.error, size: 20.sp),
+                                SizedBox(width: 8.w),
+                                Text(
+                                  AppStrings.logout,
+                                  style: TextStyle(
+                                    color: AppColors.error,
+                                    fontSize: 15.sp,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                         ),

@@ -16,7 +16,7 @@ import '../../../../core/di/injection.dart';
 import '../../../../core/network/api_client.dart';
 import '../../../../core/services/places_service.dart';
 import '../../../../core/theme/app_colors.dart';
-import '../../../../core/utils/vehicle_painter.dart';
+import '../../../../core/utils/vehicle_asset_marker.dart';
 import '../../../../core/utils/vehicle_animator.dart';
 
 class RideScreen extends StatefulWidget {
@@ -75,6 +75,13 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
   // Driver ETA tracking
   double? _driverEtaMinutes;
   double? _driverDistanceKm;
+
+  // In-progress ride tracking (driver → destination)
+  double? _rideEtaMinutes;
+  double? _rideDistanceKm;
+  List<LatLng> _inProgressRoutePoints = [];
+  DateTime _lastInProgressRouteUpdate = DateTime.fromMillisecondsSinceEpoch(0);
+  bool _firstInProgressRouteDraw = true;
 
   // WebSocket reconnection
   int _wsReconnectAttempts = 0;
@@ -218,6 +225,28 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
           patterns: [PatternItem.dash(20), PatternItem.gap(10)],
         ));
       }
+      if (_inProgressRoutePoints.isNotEmpty) {
+        _polylines.add(Polyline(
+          polylineId: const PolylineId('in_progress_route_border'),
+          points: _inProgressRoutePoints,
+          color: const Color(0xFF0D904F),
+          width: w,
+          startCap: Cap.roundCap,
+          endCap: Cap.roundCap,
+          jointType: JointType.round,
+          zIndex: 2,
+        ));
+        _polylines.add(Polyline(
+          polylineId: const PolylineId('in_progress_route'),
+          points: _inProgressRoutePoints,
+          color: const Color(0xFF00C853),
+          width: (w * 0.7).round(),
+          startCap: Cap.roundCap,
+          endCap: Cap.roundCap,
+          jointType: JointType.round,
+          zIndex: 3,
+        ));
+      }
     });
   }
 
@@ -240,6 +269,26 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
         _ride = response.data;
         _isLoading = false;
       });
+
+      // Initialise driver position from API (covers first load + reloads)
+      final driverLoc = response.data['driver_location'];
+      if (driverLoc != null) {
+        final lat = double.tryParse(driverLoc['latitude'].toString());
+        final lng = double.tryParse(driverLoc['longitude'].toString());
+        if (lat != null && lng != null) {
+          final pos = LatLng(lat, lng);
+          final isFirst = _driverPosition == null;
+          _driverPosition = pos;
+          _driverAnimator?.pushPosition(pos);
+          // Always refresh ETA; draw route on first position
+          _updateDriverEta(pos);
+          if (isFirst) _drawDriverToPickupRoute(pos);
+          // During in_progress, draw green route to destination
+          if (_ride?['status'] == 'in_progress') {
+            _drawDriverToDestinationRoute(pos);
+          }
+        }
+      }
 
       _updateMarkers();
       await _drawRoute();
@@ -440,6 +489,9 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
           _updateDriverEta(newPos);
           // Redraw driver-to-pickup route periodically
           _drawDriverToPickupRoute(newPos);
+          // During in_progress, draw route to destination + update ride ETA
+          _drawDriverToDestinationRoute(newPos);
+          _updateRideEta(newPos);
         } else if (data['type'] == 'status_update') {
           final wsStatus = data['status'];
           if (wsStatus == 'driver_requested' || wsStatus == 'driver_assigned') {
@@ -455,9 +507,12 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
               _startAssignmentCountdown();
             }
           } else if (wsStatus == 'accepted') {
-            // Driver accepted! Reload ride data
+            // Driver accepted! Clear nearby markers + reload ride data
             _assignmentTimer?.cancel();
-            setState(() => _assignedDriver = null);
+            setState(() {
+              _assignedDriver = null;
+              _markers.removeWhere((m) => m.markerId.value.startsWith('driver_'));
+            });
             await _loadRide();
             // Start tracking driver location to pickup
             if (_driverPosition != null) {
@@ -481,18 +536,27 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
             // Driver en route to pickup — reload ride data
             if (mounted) _loadRide();
           } else if (wsStatus == 'in_progress') {
-            // Ride started — clear driver route if still present
+            // Ride started — clear driver route, reset in-progress tracking
             if (mounted) {
               setState(() {
                 _polylines.removeWhere((p) =>
                     p.polylineId.value == 'driver_route_border' ||
                     p.polylineId.value == 'driver_route');
+                _firstInProgressRouteDraw = true;
               });
               _loadRide();
             }
           } else if (wsStatus == 'completed') {
-            // Ride completed — show feedback sheet
+            // Ride completed — clear in-progress route + show feedback sheet
             if (mounted) {
+              setState(() {
+                _polylines.removeWhere((p) =>
+                    p.polylineId.value == 'in_progress_route_border' ||
+                    p.polylineId.value == 'in_progress_route');
+                _inProgressRoutePoints = [];
+                _rideEtaMinutes = null;
+                _rideDistanceKm = null;
+              });
               _loadRide().then((_) {
                 if (mounted) _showRideCompletedSheet();
               });
@@ -734,8 +798,27 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
   }
 
   /// Draw route polyline between pickup and destination.
+  /// Only shows once the driver has arrived at pickup (or ride is in progress /
+  /// completed) so the passenger first sees the driver coming to them.
   Future<void> _drawRoute() async {
     if (_ride == null) return;
+
+    final status = _ride!['status'];
+
+    // Before driver arrives: don't draw the pickup → destination route.
+    // The driver-to-pickup route + ETA banner handles this phase.
+    if (status == 'requested' || status == 'accepted' ||
+        status == 'driver_arriving') {
+      // Make sure any previously drawn main route is cleared
+      setState(() {
+        _polylines.removeWhere((p) =>
+            p.polylineId.value == 'route_border' ||
+            p.polylineId.value == 'route');
+        _routePoints = [];
+      });
+      return;
+    }
+
     final pickup = LatLng(
       double.parse(_ride!['pickup_latitude'].toString()),
       double.parse(_ride!['pickup_longitude'].toString()),
@@ -745,7 +828,7 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
       double.parse(_ride!['destination_longitude'].toString()),
     );
 
-    final points = await _placesService.getRoutePolyline(pickup, dest);
+    final points = (await _placesService.getRoutePolyline(pickup, dest)).points;
     if (!mounted || points.isEmpty) return;
 
     setState(() {
@@ -781,18 +864,20 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
 
   /// Draw the route from driver current position to the pickup point.
   DateTime _lastDriverRouteUpdate = DateTime.fromMillisecondsSinceEpoch(0);
+  bool _firstDriverRouteDraw = true;
   Future<void> _drawDriverToPickupRoute(LatLng driverPos) async {
     if (_ride == null) return;
     final status = _ride!['status'];
-    // Show driver route for any pre-pickup state
-    if (status == 'in_progress' || status == 'completed' ||
+    // Only show for pre-pickup states (driver still coming to passenger)
+    if (status == 'driver_arrived' || status == 'in_progress' || status == 'completed' ||
         status == 'cancelled_passenger' || status == 'cancelled_driver' ||
         status == 'cancelled_by_passenger' || status == 'cancelled_by_driver' ||
         status == 'no_driver') return;
 
-    // Throttle: only redraw every 10 seconds
+    // Throttle: only redraw every 10 seconds (skip throttle on first draw)
     final now = DateTime.now();
-    if (now.difference(_lastDriverRouteUpdate).inSeconds < 10) return;
+    if (!_firstDriverRouteDraw && now.difference(_lastDriverRouteUpdate).inSeconds < 10) return;
+    _firstDriverRouteDraw = false;
     _lastDriverRouteUpdate = now;
 
     final pickup = LatLng(
@@ -800,7 +885,7 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
       double.parse(_ride!['pickup_longitude'].toString()),
     );
 
-    var points = await _placesService.getRoutePolyline(driverPos, pickup);
+    var points = (await _placesService.getRoutePolyline(driverPos, pickup)).points;
     if (!mounted) return;
     // Fallback: draw straight line if Directions API returns empty
     if (points.isEmpty) {
@@ -886,9 +971,110 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
 
   double _degToRad(double deg) => deg * math.pi / 180;
 
+  /// Draw the green route from driver's current position to the destination (during in_progress).
+  Future<void> _drawDriverToDestinationRoute(LatLng driverPos) async {
+    if (_ride == null) return;
+    final status = _ride!['status'];
+    if (status != 'in_progress') return;
+
+    // Throttle: only redraw every 15 seconds (skip throttle on first draw)
+    final now = DateTime.now();
+    if (!_firstInProgressRouteDraw && now.difference(_lastInProgressRouteUpdate).inSeconds < 15) return;
+    _firstInProgressRouteDraw = false;
+    _lastInProgressRouteUpdate = now;
+
+    final dest = LatLng(
+      double.parse(_ride!['destination_latitude'].toString()),
+      double.parse(_ride!['destination_longitude'].toString()),
+    );
+
+    var result = await _placesService.getRoutePolyline(driverPos, dest);
+    if (!mounted) return;
+    var points = result.points;
+    if (points.isEmpty) {
+      points = [driverPos, dest];
+    }
+
+    // Update ride ETA from route result if available
+    if (result.durationSeconds > 0) {
+      final etaMin = result.durationSeconds / 60.0;
+      final distKm = result.distanceMeters / 1000.0;
+      setState(() {
+        _rideEtaMinutes = etaMin < 1 ? 1 : etaMin;
+        _rideDistanceKm = distKm;
+      });
+    }
+
+    setState(() {
+      _polylines.removeWhere((p) =>
+          p.polylineId.value == 'in_progress_route_border' ||
+          p.polylineId.value == 'in_progress_route');
+      _inProgressRoutePoints = points;
+      final w = polylineWidthForZoom(_currentZoom);
+      // Dark green border
+      _polylines.add(Polyline(
+        polylineId: const PolylineId('in_progress_route_border'),
+        points: points,
+        color: const Color(0xFF0D904F),
+        width: w,
+        startCap: Cap.roundCap,
+        endCap: Cap.roundCap,
+        jointType: JointType.round,
+        zIndex: 2,
+      ));
+      // Green route
+      _polylines.add(Polyline(
+        polylineId: const PolylineId('in_progress_route'),
+        points: points,
+        color: const Color(0xFF00C853),
+        width: (w * 0.7).round(),
+        startCap: Cap.roundCap,
+        endCap: Cap.roundCap,
+        jointType: JointType.round,
+        zIndex: 3,
+      ));
+    });
+  }
+
+  /// Calculate ETA from driver position to destination during in_progress.
+  void _updateRideEta(LatLng driverPos) {
+    if (_ride == null) return;
+    final status = _ride!['status'];
+    if (status != 'in_progress') return;
+
+    final dest = LatLng(
+      double.parse(_ride!['destination_latitude'].toString()),
+      double.parse(_ride!['destination_longitude'].toString()),
+    );
+
+    final distKm = _haversineDistance(driverPos, dest);
+    // Estimate: avg 20 km/h in city traffic
+    final etaMin = (distKm / 20) * 60;
+
+    // Only update via Haversine if we don't have a route-based ETA
+    if (_rideEtaMinutes == null) {
+      setState(() {
+        _rideDistanceKm = distKm;
+        _rideEtaMinutes = etaMin < 1 ? 1 : etaMin;
+      });
+    }
+  }
+
   /// Load nearby drivers and show them on the map.
+  /// Only useful during 'requested' status — once a driver is assigned, skip.
   Future<void> _loadNearbyDrivers() async {
     if (_ride == null) return;
+    final status = _ride!['status'];
+    // Only show nearby drivers while searching for a driver
+    if (status != 'requested') {
+      // Clear any remaining nearby driver markers
+      if (_markers.any((m) => m.markerId.value.startsWith('driver_'))) {
+        setState(() {
+          _markers.removeWhere((m) => m.markerId.value.startsWith('driver_'));
+        });
+      }
+      return;
+    }
     try {
       final response = await _api.dio.get(
         ApiConstants.nearbyDrivers,
@@ -1001,6 +1187,7 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
 
   /// Called on every animation frame by the VehicleAnimator.
   void _onDriverFrame(LatLng position, double bearing) async {
+    final isFirstPosition = _driverPosition == null;
     _driverPosition = position;
     _driverHeading = bearing;
 
@@ -1021,6 +1208,52 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
     ));
 
     if (mounted) setState(() {});
+
+    // Keep ETA fresh on every animated frame (cheap Haversine math)
+    _updateDriverEta(position);
+    // Keep ride ETA fresh during in_progress
+    _updateRideEta(position);
+
+    // On the very first position, draw route + refit camera immediately
+    if (isFirstPosition) {
+      _drawDriverToPickupRoute(position);
+      _drawDriverToDestinationRoute(position);
+      _fitCameraToRoute();
+    }
+
+    // Smoothly move camera to keep driver visible during active ride
+    _followDriverIfNeeded(position);
+  }
+
+  /// Move camera to keep the driver marker visible during active states.
+  DateTime _lastCameraFollow = DateTime.fromMillisecondsSinceEpoch(0);
+  Future<void> _followDriverIfNeeded(LatLng driverPos) async {
+    final status = _ride?['status'];
+    if (status == null) return;
+    // Only follow during active tracking states
+    final shouldFollow = (status == 'accepted' || status == 'driver_arriving' ||
+        status == 'driver_arrived' || status == 'in_progress');
+    if (!shouldFollow) return;
+
+    // Throttle: max once every 5 seconds
+    final now = DateTime.now();
+    if (now.difference(_lastCameraFollow).inSeconds < 5) return;
+    _lastCameraFollow = now;
+
+    try {
+      final controller = await _mapController.future;
+      final bounds = await controller.getVisibleRegion();
+      // Check if driver is within visible bounds (with 15% margin)
+      final latMargin = (bounds.northeast.latitude - bounds.southwest.latitude) * 0.15;
+      final lngMargin = (bounds.northeast.longitude - bounds.southwest.longitude) * 0.15;
+      final inBounds = driverPos.latitude > bounds.southwest.latitude + latMargin &&
+          driverPos.latitude < bounds.northeast.latitude - latMargin &&
+          driverPos.longitude > bounds.southwest.longitude + lngMargin &&
+          driverPos.longitude < bounds.northeast.longitude - lngMargin;
+      if (!inBounds) {
+        controller.animateCamera(CameraUpdate.newLatLng(driverPos));
+      }
+    } catch (_) {}
   }
 
   Future<void> _cancelRide() async {
@@ -1076,79 +1309,6 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
         );
       }
     } catch (_) {}
-  }
-
-  String _getStatusText(String? status) {
-    switch (status) {
-      case 'requested':
-        return 'Recherche d\'un chauffeur...';
-      case 'accepted':
-        return 'Chauffeur trouvé !';
-      case 'driver_arriving':
-        return 'Le chauffeur arrive...';
-      case 'driver_arrived':
-        return 'Votre chauffeur est arrivé !';
-      case 'in_progress':
-        return 'Course en cours';
-      case 'completed':
-        return 'Course terminée';
-      case 'no_driver':
-        return 'Aucun chauffeur disponible';
-      case 'cancelled_passenger':
-        return 'Course annulée';
-      case 'cancelled_driver':
-        return 'Course annulée par le chauffeur';
-      default:
-        return status ?? 'Chargement...';
-    }
-  }
-
-  IconData _getStatusIcon(String? status) {
-    switch (status) {
-      case 'requested':
-        return Icons.search_rounded;
-      case 'accepted':
-        return Icons.check_circle_rounded;
-      case 'driver_arriving':
-        return Icons.directions_car_rounded;
-      case 'driver_arrived':
-        return Icons.place_rounded;
-      case 'in_progress':
-        return Icons.route_rounded;
-      case 'completed':
-        return Icons.flag_rounded;
-      case 'no_driver':
-        return Icons.person_off_rounded;
-      case 'cancelled_passenger':
-      case 'cancelled_driver':
-        return Icons.cancel_rounded;
-      default:
-        return Icons.hourglass_empty_rounded;
-    }
-  }
-
-  Color _getStatusColor(String? status) {
-    switch (status) {
-      case 'requested':
-        return AppColors.primary;
-      case 'accepted':
-        return AppColors.success;
-      case 'driver_arriving':
-        return AppColors.info;
-      case 'driver_arrived':
-        return AppColors.success;
-      case 'in_progress':
-        return AppColors.info;
-      case 'completed':
-        return AppColors.success;
-      case 'no_driver':
-        return const Color(0xFFEF6C00);
-      case 'cancelled_passenger':
-      case 'cancelled_driver':
-        return AppColors.error;
-      default:
-        return AppColors.textSecondary;
-    }
   }
 
   @override
@@ -1370,7 +1530,7 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
                         ],
                       ),
                     ),
-                    if (_driverEtaMinutes != null) ...[                      
+                    if (_driverEtaMinutes != null) ...[
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
@@ -1455,19 +1615,110 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
               ),
             ),
 
+          // ── In-progress ride tracking banner ──
+          if (status == 'in_progress' && _ride?['driver'] != null)
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 70.h,
+              left: 16.w,
+              right: 16.w,
+              child: Container(
+                padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1B1B1B),
+                  borderRadius: BorderRadius.circular(16.r),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.3),
+                      blurRadius: 16,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 44.w,
+                      height: 44.w,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF00C853).withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(12.r),
+                      ),
+                      child: Icon(Icons.navigation_rounded, color: const Color(0xFF00C853), size: 24.sp),
+                    ),
+                    SizedBox(width: 12.w),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Course en cours',
+                            style: GoogleFonts.poppins(
+                              fontSize: 14.sp,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.white,
+                            ),
+                          ),
+                          SizedBox(height: 2.h),
+                          Text(
+                            _ride!['destination_address'] ?? 'Destination',
+                            style: GoogleFonts.poppins(
+                              fontSize: 11.sp,
+                              color: Colors.white.withOpacity(0.6),
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (_rideEtaMinutes != null) ...[
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(
+                            '~${_rideEtaMinutes!.round()} min',
+                            style: GoogleFonts.poppins(
+                              fontSize: 16.sp,
+                              fontWeight: FontWeight.w800,
+                              color: const Color(0xFF00C853),
+                            ),
+                          ),
+                          if (_rideDistanceKm != null)
+                            Text(
+                              '${_rideDistanceKm!.toStringAsFixed(1)} km',
+                              style: GoogleFonts.poppins(
+                                fontSize: 11.sp,
+                                color: Colors.white.withOpacity(0.5),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ] else
+                      SizedBox(
+                        width: 20.w, height: 20.w,
+                        child: const CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Color(0xFF00C853),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+
           // ── Bottom info panel ──
           Positioned(
             bottom: 0,
             left: 0,
             right: 0,
             child: Container(
-              padding: EdgeInsets.fromLTRB(16.w, 8.h, 16.w, 20.h),
+              padding: EdgeInsets.fromLTRB(20.w, 6.h, 20.w, MediaQuery.of(context).padding.bottom + 16.h),
               decoration: BoxDecoration(
                 color: Colors.white,
                 borderRadius: BorderRadius.vertical(top: Radius.circular(24.r)),
                 boxShadow: [
                   BoxShadow(
-                    color: AppColors.shadow.withOpacity(0.08),
+                    color: Colors.black.withOpacity(0.06),
                     blurRadius: 20,
                     offset: const Offset(0, -4),
                   ),
@@ -1475,464 +1726,72 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
               ),
               child: _isLoading
                   ? Padding(
-                      padding: EdgeInsets.symmetric(vertical: 20.h),
+                      padding: EdgeInsets.symmetric(vertical: 24.h),
                       child: const Center(child: CircularProgressIndicator()),
                     )
                   : Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         // Handle bar
-                        Container(
-                          width: 36.w,
-                          height: 3.5.h,
-                          decoration: BoxDecoration(
-                            color: AppColors.border,
-                            borderRadius: BorderRadius.circular(2.r),
+                        Center(
+                          child: Container(
+                            width: 36.w,
+                            height: 4.h,
+                            margin: EdgeInsets.only(bottom: 14.h),
+                            decoration: BoxDecoration(
+                              color: AppColors.border,
+                              borderRadius: BorderRadius.circular(2.r),
+                            ),
                           ),
                         ),
-                        SizedBox(height: 10.h),
 
-                        // Status chip
-                        Container(
-                          padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 6.h),
-                          decoration: BoxDecoration(
-                            color: _getStatusColor(status).withOpacity(0.1),
-                            borderRadius: BorderRadius.circular(20.r),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                _getStatusIcon(status),
-                                size: 15.sp,
-                                color: _getStatusColor(status),
-                              ),
-                              SizedBox(width: 6.w),
-                              Text(
-                                _getStatusText(status),
-                                style: TextStyle(
-                                  color: _getStatusColor(status),
-                                  fontWeight: FontWeight.w700,
-                                  fontSize: 12.sp,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        SizedBox(height: 10.h),
+                        // ── Route card ──
+                        _buildRouteCard(),
+                        SizedBox(height: 12.h),
 
-                        // Route summary (compact)
-                        Container(
-                          padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 8.h),
-                          decoration: BoxDecoration(
-                            color: AppColors.inputFill,
-                            borderRadius: BorderRadius.circular(12.r),
-                          ),
-                          child: Row(
-                            children: [
-                              Column(
-                                children: [
-                                  Icon(Icons.circle, color: AppColors.success, size: 8.sp),
-                                  Container(width: 1.5, height: 16.h, color: AppColors.border),
-                                  Icon(Icons.location_on, color: AppColors.error, size: 12.sp),
-                                ],
-                              ),
-                              SizedBox(width: 8.w),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      _ride?['pickup_address'] ?? '',
-                                      style: TextStyle(fontSize: 11.sp, fontWeight: FontWeight.w500),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                    SizedBox(height: 10.h),
-                                    Text(
-                                      _ride?['destination_address'] ?? '',
-                                      style: TextStyle(fontSize: 11.sp, fontWeight: FontWeight.w500),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        SizedBox(height: 8.h),
-
-                        // Driver info (compact) + contact buttons
+                        // ── Driver info ──
                         if (_ride?['driver'] != null) ...[
-                          Container(
-                            padding: EdgeInsets.all(10.w),
-                            decoration: BoxDecoration(
-                              color: AppColors.inputFill,
-                              borderRadius: BorderRadius.circular(12.r),
-                            ),
-                            child: Row(
-                              children: [
-                                // Driver avatar
-                                Container(
-                                  width: 42.w,
-                                  height: 42.w,
-                                  decoration: BoxDecoration(
-                                    color: AppColors.primary.withOpacity(0.12),
-                                    borderRadius: BorderRadius.circular(12.r),
-                                  ),
-                                  child: Icon(Icons.person_rounded, color: AppColors.primaryDark, size: 22.sp),
-                                ),
-                                SizedBox(width: 10.w),
-                                // Name + vehicle + rating
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        _ride!['driver']['full_name'] ?? '',
-                                        style: GoogleFonts.poppins(
-                                          fontWeight: FontWeight.w700,
-                                          fontSize: 13.sp,
-                                          color: AppColors.textPrimary,
-                                        ),
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                      if (_ride!['driver_vehicle'] != null)
-                                        Text(
-                                          '${_ride!['driver_vehicle']['make']} ${_ride!['driver_vehicle']['model']} • ${_ride!['driver_vehicle']['license_plate']}',
-                                          style: GoogleFonts.poppins(
-                                            color: AppColors.textSecondary,
-                                            fontSize: 10.sp,
-                                          ),
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                      Row(
-                                        children: [
-                                          ...List.generate(5, (i) => Icon(
-                                            Icons.star_rounded,
-                                            size: 12.sp,
-                                            color: i < ((num.tryParse(_ride!['driver']['rating']?.toString() ?? '') ?? 4).round())
-                                                ? AppColors.primary
-                                                : AppColors.border,
-                                          )),
-                                          SizedBox(width: 3.w),
-                                          Text(
-                                            '${_ride!['driver']['rating'] ?? '4.5'}',
-                                            style: GoogleFonts.poppins(
-                                              fontSize: 10.sp,
-                                              fontWeight: FontWeight.w600,
-                                              color: AppColors.textSecondary,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                // Call + WhatsApp buttons
-                                Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    GestureDetector(
-                                      onTap: () async {
-                                        final phone = _ride?['driver']?['phone_number'];
-                                        if (phone == null) return;
-                                        final waUri = Uri.parse('https://wa.me/${phone.replaceAll('+', '')}');
-                                        await launchUrl(waUri, mode: LaunchMode.externalApplication);
-                                      },
-                                      child: Container(
-                                        width: 36.w,
-                                        height: 36.w,
-                                        decoration: BoxDecoration(
-                                          color: const Color(0xFF25D366).withOpacity(0.12),
-                                          borderRadius: BorderRadius.circular(10.r),
-                                        ),
-                                        child: Icon(Icons.chat_rounded, color: const Color(0xFF25D366), size: 18.sp),
-                                      ),
-                                    ),
-                                    SizedBox(width: 6.w),
-                                    GestureDetector(
-                                      onTap: () async {
-                                        final phone = _ride?['driver']?['phone_number'];
-                                        if (phone == null) return;
-                                        final uri = Uri(scheme: 'tel', path: phone);
-                                        await launchUrl(uri);
-                                      },
-                                      child: Container(
-                                        width: 36.w,
-                                        height: 36.w,
-                                        decoration: BoxDecoration(
-                                          gradient: const LinearGradient(colors: AppColors.ctaGradient),
-                                          borderRadius: BorderRadius.circular(10.r),
-                                        ),
-                                        child: Icon(Icons.phone_rounded, color: Colors.white, size: 18.sp),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                          SizedBox(height: 8.h),
-                        ],
-
-                        // Price + distance + duration row (compact)
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Container(
-                                padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 8.h),
-                                decoration: BoxDecoration(
-                                  color: AppColors.primary.withOpacity(0.08),
-                                  borderRadius: BorderRadius.circular(10.r),
-                                ),
-                                child: Column(
-                                  children: [
-                                    Text(
-                                      '${_ride?['estimated_price'] ?? '0'} CDF',
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.w800,
-                                        fontSize: 14.sp,
-                                        color: AppColors.primaryDark,
-                                      ),
-                                    ),
-                                    Text(
-                                      'Prix',
-                                      style: TextStyle(color: AppColors.textSecondary, fontSize: 10.sp),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                            SizedBox(width: 6.w),
-                            Expanded(
-                              child: Container(
-                                padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 8.h),
-                                decoration: BoxDecoration(
-                                  color: AppColors.inputFill,
-                                  borderRadius: BorderRadius.circular(10.r),
-                                ),
-                                child: Column(
-                                  children: [
-                                    Text(
-                                      '${_ride?['distance_km'] ?? '-'} km',
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.w700,
-                                        fontSize: 14.sp,
-                                        color: AppColors.textPrimary,
-                                      ),
-                                    ),
-                                    Text(
-                                      'Distance',
-                                      style: TextStyle(color: AppColors.textSecondary, fontSize: 10.sp),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                            SizedBox(width: 6.w),
-                            Expanded(
-                              child: Container(
-                                padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 8.h),
-                                decoration: BoxDecoration(
-                                  color: AppColors.inputFill,
-                                  borderRadius: BorderRadius.circular(10.r),
-                                ),
-                                child: Column(
-                                  children: [
-                                    Text(
-                                      '${_ride?['estimated_duration_minutes'] ?? '-'} min',
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.w700,
-                                        fontSize: 14.sp,
-                                        color: AppColors.textPrimary,
-                                      ),
-                                    ),
-                                    Text(
-                                      'Durée',
-                                      style: TextStyle(color: AppColors.textSecondary, fontSize: 10.sp),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        SizedBox(height: 10.h),
-
-                        // No driver available — professional message
-                        if (isNoDriver) ...[                          
-                          Container(
-                            padding: EdgeInsets.all(20.w),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFFFF3E0),
-                              borderRadius: BorderRadius.circular(16.r),
-                              border: Border.all(color: const Color(0xFFEF6C00).withOpacity(0.2)),
-                            ),
-                            child: Column(
-                              children: [
-                                Container(
-                                  width: 56.w,
-                                  height: 56.w,
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFFEF6C00).withOpacity(0.12),
-                                    shape: BoxShape.circle,
-                                  ),
-                                  child: Icon(
-                                    Icons.person_search_rounded,
-                                    color: const Color(0xFFEF6C00),
-                                    size: 28.sp,
-                                  ),
-                                ),
-                                SizedBox(height: 14.h),
-                                Text(
-                                  'Aucun chauffeur disponible',
-                                  style: GoogleFonts.poppins(
-                                    fontSize: 15.sp,
-                                    fontWeight: FontWeight.w700,
-                                    color: const Color(0xFFE65100),
-                                  ),
-                                ),
-                                SizedBox(height: 6.h),
-                                Text(
-                                  'Tous nos chauffeurs sont actuellement occupés dans votre zone. Veuillez réessayer dans quelques instants.',
-                                  textAlign: TextAlign.center,
-                                  style: GoogleFonts.poppins(
-                                    fontSize: 12.sp,
-                                    color: AppColors.textSecondary,
-                                    height: 1.5,
-                                  ),
-                                ),
-                                SizedBox(height: 18.h),
-                                SizedBox(
-                                  width: double.infinity,
-                                  height: 48.h,
-                                  child: ElevatedButton.icon(
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: const Color(0xFFEF6C00),
-                                      foregroundColor: Colors.white,
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(14.r),
-                                      ),
-                                      elevation: 0,
-                                    ),
-                                    icon: const Icon(Icons.refresh_rounded, size: 20),
-                                    label: Text(
-                                      'Réessayer',
-                                      style: GoogleFonts.poppins(
-                                        fontWeight: FontWeight.w600,
-                                        fontSize: 14.sp,
-                                      ),
-                                    ),
-                                    onPressed: () => context.go('/home'),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
+                          _buildDriverCard(),
                           SizedBox(height: 12.h),
                         ],
 
-                        // Actions
+                        // ── Price / distance / duration ──
+                        _buildPriceRow(),
+                        SizedBox(height: 14.h),
+
+                        // ── No driver ──
+                        if (isNoDriver) ...[
+                          _buildNoDriverCard(),
+                          SizedBox(height: 14.h),
+                        ],
+
+                        // ── Cancel button ──
                         if (isCancellable)
                           SizedBox(
                             width: double.infinity,
-                            height: 44.h,
-                            child: OutlinedButton.icon(
-                              style: OutlinedButton.styleFrom(
-                                foregroundColor: AppColors.error,
-                                side: BorderSide(color: AppColors.error.withOpacity(0.4)),
+                            height: 48.h,
+                            child: TextButton(
+                              style: TextButton.styleFrom(
+                                foregroundColor: AppColors.textSecondary,
                                 shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12.r),
+                                  borderRadius: BorderRadius.circular(14.r),
+                                  side: BorderSide(color: AppColors.border),
                                 ),
                               ),
-                              icon: const Icon(Icons.close_rounded, size: 18),
-                              label: Text(
-                                'Annuler la course',
-                                style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13.sp),
-                              ),
                               onPressed: _cancelRide,
+                              child: Text(
+                                'Annuler la course',
+                                style: GoogleFonts.poppins(
+                                  fontSize: 14.sp,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
                             ),
                           ),
 
+                        // ── Completed section ──
                         if (isCompleted) ...[
-                          // Payment info row
-                          Container(
-                            padding: EdgeInsets.all(14.w),
-                            decoration: BoxDecoration(
-                              color: AppColors.success.withOpacity(0.08),
-                              borderRadius: BorderRadius.circular(14.r),
-                              border: Border.all(color: AppColors.success.withOpacity(0.2)),
-                            ),
-                            child: Row(
-                              children: [
-                                Icon(Icons.check_circle_rounded, color: AppColors.success, size: 22.sp),
-                                SizedBox(width: 10.w),
-                                Text(
-                                  'Course terminée',
-                                  style: GoogleFonts.poppins(
-                                    fontSize: 14.sp,
-                                    fontWeight: FontWeight.w600,
-                                    color: AppColors.success,
-                                  ),
-                                ),
-                                const Spacer(),
-                                Text(
-                                  '${_ride?['final_fare'] ?? _ride?['estimated_price'] ?? '0'} CDF',
-                                  style: GoogleFonts.poppins(
-                                    fontSize: 16.sp,
-                                    fontWeight: FontWeight.w800,
-                                    color: AppColors.primaryDark,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          SizedBox(height: 12.h),
-                          SizedBox(
-                            width: double.infinity,
-                            height: 56.h,
-                            child: Container(
-                              decoration: BoxDecoration(
-                                gradient: const LinearGradient(
-                                  colors: AppColors.ctaGradient,
-                                ),
-                                borderRadius: BorderRadius.circular(18.r),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: AppColors.primaryDark.withOpacity(0.3),
-                                    blurRadius: 12,
-                                    offset: const Offset(0, 4),
-                                  ),
-                                ],
-                              ),
-                              child: Material(
-                                color: Colors.transparent,
-                                child: InkWell(
-                                  borderRadius: BorderRadius.circular(18.r),
-                                  onTap: () => context.push('/ride/${widget.rideId}/rate'),
-                                  child: Row(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Icon(Icons.star_rounded, color: Colors.white, size: 22.sp),
-                                      SizedBox(width: 8.w),
-                                      Text(
-                                        'Noter le chauffeur',
-                                        style: GoogleFonts.poppins(
-                                          fontWeight: FontWeight.w700,
-                                          fontSize: 16.sp,
-                                          color: Colors.white,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
+                          _buildCompletedSection(),
                         ],
                       ],
                     ),
@@ -1940,6 +1799,329 @@ class _RideScreenState extends State<RideScreen> with TickerProviderStateMixin {
           ),
         ],
       ),
+    );
+  }
+
+  // ──────────────────────────────────────────────
+  //  Bottom panel sub-widgets
+  // ──────────────────────────────────────────────
+
+  Widget _buildRouteCard() {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: EdgeInsets.only(top: 3.h),
+          child: Column(
+            children: [
+              Container(
+                width: 10.w,
+                height: 10.w,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF00C853),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: const Color(0xFF00C853).withOpacity(0.3), width: 2),
+                ),
+              ),
+              Container(width: 1.5, height: 22.h, color: AppColors.border),
+              Container(
+                width: 10.w,
+                height: 10.w,
+                decoration: BoxDecoration(
+                  color: AppColors.error,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: AppColors.error.withOpacity(0.3), width: 2),
+                ),
+              ),
+            ],
+          ),
+        ),
+        SizedBox(width: 12.w),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                _ride?['pickup_address'] ?? 'Départ',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: GoogleFonts.poppins(
+                  fontSize: 13.sp,
+                  fontWeight: FontWeight.w500,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+              SizedBox(height: 14.h),
+              Text(
+                _ride?['destination_address'] ?? 'Destination',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: GoogleFonts.poppins(
+                  fontSize: 13.sp,
+                  fontWeight: FontWeight.w500,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDriverCard() {
+    final driver = _ride!['driver'];
+    final vehicle = _ride!['driver_vehicle'];
+    final phone = driver?['phone_number'];
+    final rating = num.tryParse(driver?['rating']?.toString() ?? '') ?? 4.5;
+
+    return Container(
+      padding: EdgeInsets.all(12.w),
+      decoration: BoxDecoration(
+        color: AppColors.inputFill,
+        borderRadius: BorderRadius.circular(14.r),
+      ),
+      child: Row(
+        children: [
+          // Avatar
+          Container(
+            width: 44.w,
+            height: 44.w,
+            decoration: BoxDecoration(
+              color: AppColors.primary.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(22.r),
+            ),
+            child: Icon(Icons.person_rounded, color: AppColors.primaryDark, size: 24.sp),
+          ),
+          SizedBox(width: 12.w),
+          // Info
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  driver?['full_name'] ?? '',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: GoogleFonts.poppins(
+                    fontSize: 14.sp,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+                SizedBox(height: 2.h),
+                Row(
+                  children: [
+                    if (vehicle != null) ...[
+                      Text(
+                        '${vehicle['make']} ${vehicle['model']}',
+                        style: GoogleFonts.poppins(fontSize: 11.sp, color: AppColors.textSecondary),
+                      ),
+                      Text(' · ', style: TextStyle(color: AppColors.textHint, fontSize: 11.sp)),
+                    ],
+                    Icon(Icons.star_rounded, size: 13.sp, color: AppColors.primary),
+                    SizedBox(width: 2.w),
+                    Text(
+                      rating.toStringAsFixed(1),
+                      style: GoogleFonts.poppins(
+                        fontSize: 11.sp,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          // Actions
+          if (phone != null) ...[
+            _buildContactButton(
+              icon: Icons.chat_rounded,
+              color: const Color(0xFF25D366),
+              onTap: () => launchUrl(
+                Uri.parse('https://wa.me/${phone.replaceAll('+', '')}'),
+                mode: LaunchMode.externalApplication,
+              ),
+            ),
+            SizedBox(width: 8.w),
+            _buildContactButton(
+              icon: Icons.phone_rounded,
+              color: AppColors.primary,
+              onTap: () => launchUrl(Uri(scheme: 'tel', path: phone)),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildContactButton({
+    required IconData icon,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 38.w,
+        height: 38.w,
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(12.r),
+        ),
+        child: Icon(icon, color: color, size: 18.sp),
+      ),
+    );
+  }
+
+  Widget _buildPriceRow() {
+    final price = _ride?['estimated_price'] ?? '0';
+    final distance = _ride?['distance_km'];
+    final duration = _ride?['estimated_duration_minutes'];
+
+    return Row(
+      children: [
+        // Price — prominent
+        Container(
+          padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h),
+          decoration: BoxDecoration(
+            color: AppColors.primary.withOpacity(0.08),
+            borderRadius: BorderRadius.circular(12.r),
+          ),
+          child: Text(
+            '$price CDF',
+            style: GoogleFonts.poppins(
+              fontSize: 16.sp,
+              fontWeight: FontWeight.w700,
+              color: AppColors.primaryDark,
+            ),
+          ),
+        ),
+        const Spacer(),
+        // Distance + Duration — subtle
+        if (distance != null)
+          Text(
+            '$distance km',
+            style: GoogleFonts.poppins(fontSize: 12.sp, color: AppColors.textSecondary),
+          ),
+        if (distance != null && duration != null)
+          Text(
+            '  ·  ',
+            style: TextStyle(color: AppColors.textHint, fontSize: 12.sp),
+          ),
+        if (duration != null)
+          Text(
+            '$duration min',
+            style: GoogleFonts.poppins(fontSize: 12.sp, color: AppColors.textSecondary),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildNoDriverCard() {
+    return Container(
+      padding: EdgeInsets.all(16.w),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF8E1),
+        borderRadius: BorderRadius.circular(14.r),
+      ),
+      child: Column(
+        children: [
+          Icon(Icons.person_search_rounded, color: const Color(0xFFEF6C00), size: 32.sp),
+          SizedBox(height: 10.h),
+          Text(
+            'Aucun chauffeur disponible',
+            style: GoogleFonts.poppins(
+              fontSize: 14.sp,
+              fontWeight: FontWeight.w600,
+              color: const Color(0xFFE65100),
+            ),
+          ),
+          SizedBox(height: 4.h),
+          Text(
+            'Veuillez réessayer dans quelques instants.',
+            textAlign: TextAlign.center,
+            style: GoogleFonts.poppins(fontSize: 12.sp, color: AppColors.textSecondary),
+          ),
+          SizedBox(height: 12.h),
+          SizedBox(
+            width: double.infinity,
+            height: 44.h,
+            child: ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFEF6C00),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.r)),
+                elevation: 0,
+              ),
+              onPressed: () => context.go('/home'),
+              child: Text('Réessayer', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 14.sp)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCompletedSection() {
+    final fare = _ride?['final_fare'] ?? _ride?['estimated_price'] ?? '0';
+    return Column(
+      children: [
+        // Completed banner
+        Container(
+          padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
+          decoration: BoxDecoration(
+            color: AppColors.success.withOpacity(0.08),
+            borderRadius: BorderRadius.circular(14.r),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.check_circle_rounded, color: AppColors.success, size: 20.sp),
+              SizedBox(width: 10.w),
+              Text(
+                'Course terminée',
+                style: GoogleFonts.poppins(fontSize: 14.sp, fontWeight: FontWeight.w600, color: AppColors.success),
+              ),
+              const Spacer(),
+              Text(
+                '$fare CDF',
+                style: GoogleFonts.poppins(fontSize: 16.sp, fontWeight: FontWeight.w700, color: AppColors.primaryDark),
+              ),
+            ],
+          ),
+        ),
+        SizedBox(height: 12.h),
+        // Rate button
+        SizedBox(
+          width: double.infinity,
+          height: 50.h,
+          child: Container(
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(colors: AppColors.ctaGradient),
+              borderRadius: BorderRadius.circular(14.r),
+            ),
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(14.r),
+                onTap: () => context.push('/ride/${widget.rideId}/rate'),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.star_rounded, color: Colors.white, size: 20.sp),
+                    SizedBox(width: 8.w),
+                    Text(
+                      'Noter le chauffeur',
+                      style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 15.sp, color: Colors.white),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 

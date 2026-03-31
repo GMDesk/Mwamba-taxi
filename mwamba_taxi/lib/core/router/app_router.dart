@@ -10,9 +10,26 @@ import '../../features/ride/presentation/screens/ride_screen.dart';
 import '../../features/ride/presentation/screens/ride_history_screen.dart';
 import '../../features/profile/presentation/screens/profile_screen.dart';
 import '../../features/ride/presentation/screens/rating_screen.dart';
+import '../di/injection.dart';
+import '../network/api_client.dart';
+
+/// Public routes that don't require an active session.
+const _publicPaths = {'/', '/welcome', '/login', '/register', '/otp'};
 
 final appRouter = GoRouter(
   initialLocation: '/',
+  redirect: (context, state) async {
+    final path = state.matchedLocation;
+    if (_publicPaths.contains(path)) return null;
+
+    final api = getIt<ApiClient>();
+    final valid = await api.isSessionValid();
+    if (!valid) {
+      await api.clearTokens();
+      return '/welcome';
+    }
+    return null;
+  },
   routes: [
     GoRoute(
       path: '/',

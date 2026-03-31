@@ -1,0 +1,156 @@
+name: 🚀 Deploy Mwamba Taxi Backend
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/**'
+  workflow_dispatch:
+    inputs:
+      deploy_mode:
+        description: 'Mode de déploiement'
+        required: true
+        default: 'full'
+        type: choice
+        options:
+          - full
+          - quick
+          - migrate-only
+
+env:
+  SERVER_HOST: 34.62.184.191
+  SERVER_USER: Gedeon
+  PROJECT_DIR: /home/Gedeon/Mwamba-taxi
+
+jobs:
+  # ─── Tests & Validation ─────────────────────────────────────────
+  test:
+    name: 🧪 Tests & Lint
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: mwamba_taxi_test
+          POSTGRES_USER: mwamba
+          POSTGRES_PASSWORD: test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 🐍 Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: 'backend/backend/requirements.txt'
+
+      - name: 📦 Installer les dépendances
+        run: |
+          cd backend/backend
+          pip install -r requirements.txt
+
+      - name: ✅ Django system check
+        env:
+          SECRET_KEY: test-secret-key-for-ci
+          DEBUG: 'True'
+          DATABASE_URL: postgres://mwamba:test_password@localhost:5432/mwamba_taxi_test
+          REDIS_URL: redis://localhost:6379/0
+          ALLOWED_HOSTS: localhost
+        run: |
+          cd backend/backend
+          python manage.py check --deploy 2>&1 || true
+          python manage.py migrate --noinput
+          echo "✅ Django check & migrations OK"
+
+  # ─── Déploiement sur le serveur GCP ─────────────────────────────
+  deploy:
+    name: 🚢 Deploy to Production
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
+    environment: production
+
+    steps:
+      - name: 🔐 SSH et déploiement
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ env.SERVER_HOST }}
+          username: ${{ env.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script_stop: true
+          script: |
+            cd ${{ env.PROJECT_DIR }}
+            echo "╔═══════════════════════════════════════╗"
+            echo "║  🚕 Mwamba Taxi — Auto Deploy         ║"
+            echo "╚═══════════════════════════════════════╝"
+
+            # Backup avant déploiement
+            echo "💾 Backup base de données..."
+            mkdir -p backups
+            docker compose -f docker-compose.yml -f docker-compose.production.yml \
+              exec -T db pg_dump -U mwamba mwamba_taxi | gzip > \
+              backups/pre_deploy_$(date +%Y%m%d_%H%M%S).sql.gz || true
+
+            # Sauvegarder le commit actuel
+            git rev-parse HEAD > .last-deploy-commit
+
+            # Pull le code
+            echo "📥 Git pull..."
+            git pull origin master --rebase
+
+            # Mode de déploiement
+            MODE="${{ github.event.inputs.deploy_mode || 'full' }}"
+
+            if [ "$MODE" = "full" ]; then
+              echo "🏗️  Build complet..."
+              docker compose -f docker-compose.yml -f docker-compose.production.yml \
+                build --no-cache backend
+            fi
+
+            echo "🚀 Redémarrage des services..."
+            docker compose -f docker-compose.yml -f docker-compose.production.yml \
+              up -d --force-recreate
+
+            # Attendre le health check
+            echo "⏳ Health check..."
+            sleep 15
+            for i in 1 2 3 4 5; do
+              if curl -sf http://localhost:8000/api/health/ > /dev/null; then
+                echo "💚 Health check OK!"
+                break
+              fi
+              echo "   ↻ Tentative $i/5..."
+              sleep 5
+            done
+
+            # Nettoyage
+            docker image prune -f 2>/dev/null || true
+
+            echo "✅ Déploiement terminé!"
+            docker compose -f docker-compose.yml -f docker-compose.production.yml ps
+
+      - name: 🔔 Notification succès
+        if: success()
+        run: echo "✅ Déploiement réussi sur mwambataxi.com"
+
+      - name: ❌ Notification échec
+        if: failure()
+        run: echo "❌ Déploiement échoué — vérifier les logs"

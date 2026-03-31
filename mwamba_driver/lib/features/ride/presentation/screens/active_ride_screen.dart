@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -16,7 +17,7 @@ import '../../../../core/di/injection.dart';
 import '../../../../core/network/api_client.dart';
 import '../../../../core/services/route_service.dart';
 import '../../../../core/theme/app_colors.dart';
-import '../../../../core/utils/vehicle_painter.dart';
+import '../../../../core/utils/vehicle_asset_marker.dart';
 import '../../../../core/utils/vehicle_animator.dart';
 import '../../../../core/widgets/app_alert.dart';
 
@@ -63,6 +64,13 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
   String _etaText = '';
   String _distanceText = '';
 
+  // ── navigation steps ───────────────────────────────────────────────────────
+  List<NavigationStep> _navSteps = [];
+  int _currentStepIndex = 0;
+  String _nextInstruction = '';
+  String _nextStepDistance = '';
+  String _nextManeuver = '';
+
   // ── driving mode ───────────────────────────────────────────────────────────
   bool _drivingMode = false;
 
@@ -72,9 +80,11 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
   final Map<int, BitmapDescriptor> _carIconCache = {};
   Timer? _zoomDebounce;
 
-  // ── route refresh ──────────────────────────────────────────────────────────
+  // ── route refresh & deviation ─────────────────────────────────────────────
   Timer? _routeRefreshTimer;
   DateTime _lastRouteRefresh = DateTime.fromMillisecondsSinceEpoch(0);
+  static const double _deviationThreshold = 80; // metres before auto-reroute
+  bool _hasTriggeredArriving = false;
 
   // ── connections ────────────────────────────────────────────────────────────
   WebSocketChannel? _ws;
@@ -110,6 +120,7 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
       vsync: this,
       onFrame: _onVehicleFrame,
     );
+    _initCurrentPosition(); // get real GPS first
     _loadRide();
     _startTracking();
     _connectWebSocket();
@@ -125,6 +136,31 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
   Future<void> _loadMapStyle() async {
     _mapStyle = await rootBundle.loadString('assets/map_style_light.json');
     _mapController?.setMapStyle(_mapStyle!);
+  }
+
+  /// Get the real GPS position immediately so the car marker starts at the
+  /// correct location instead of the hardcoded default.
+  Future<void> _initCurrentPosition() async {
+    try {
+      // Try last known first (instant, no GPS warm-up)
+      final last = await Geolocator.getLastKnownPosition();
+      if (last != null && mounted) {
+        setState(() => _currentPosition = LatLng(last.latitude, last.longitude));
+      }
+      // Then get a fresh fix
+      final pos = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+      );
+      if (mounted) {
+        final newPos = LatLng(pos.latitude, pos.longitude);
+        _currentPosition = newPos;
+        _heading = pos.heading;
+        _vehicleAnimator?.pushPosition(newPos, bearing: pos.heading);
+        _fetchRoute();
+      }
+    } catch (_) {
+      // Stream will take over when it fires
+    }
   }
 
   Future<void> _initCarIcon() async {
@@ -215,8 +251,74 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
         _routePoints = result.points;
         _etaText = result.durationText;
         _distanceText = result.distanceText;
+        _navSteps = result.steps;
+        _updateCurrentStep();
       });
+
+      // Auto-trigger driver_arriving when first route is loaded
+      if (_status == 'accepted' && !_hasTriggeredArriving) {
+        _hasTriggeredArriving = true;
+        _markDriverArriving();
+      }
     }
+  }
+
+  /// Haversine distance in metres between two LatLng points.
+  static double _haversine(LatLng a, LatLng b) {
+    const R = 6371000.0; // Earth radius in metres
+    final dLat = _toRad(b.latitude - a.latitude);
+    final dLng = _toRad(b.longitude - a.longitude);
+    final sinLat = math.sin(dLat / 2);
+    final sinLng = math.sin(dLng / 2);
+    final h = sinLat * sinLat +
+        math.cos(_toRad(a.latitude)) * math.cos(_toRad(b.latitude)) * sinLng * sinLng;
+    return 2 * R * math.asin(math.sqrt(h));
+  }
+
+  static double _toRad(double deg) => deg * math.pi / 180;
+
+  /// Minimum distance (metres) from a point to any segment of a polyline.
+  static double _minDistanceToPolyline(LatLng point, List<LatLng> polyline) {
+    double minDist = double.infinity;
+    for (int i = 0; i < polyline.length - 1; i++) {
+      final d = _distToSegment(point, polyline[i], polyline[i + 1]);
+      if (d < minDist) minDist = d;
+      if (minDist < 10) break; // close enough, skip rest
+    }
+    return minDist;
+  }
+
+  /// Distance from point P to segment AB (approximate, works well for short segments).
+  static double _distToSegment(LatLng p, LatLng a, LatLng b) {
+    final dAB = _haversine(a, b);
+    if (dAB < 1) return _haversine(p, a);
+    // Project P onto AB using dot product ratio
+    final t = (((p.latitude - a.latitude) * (b.latitude - a.latitude) +
+                (p.longitude - a.longitude) * (b.longitude - a.longitude)) /
+            ((b.latitude - a.latitude) * (b.latitude - a.latitude) +
+                (b.longitude - a.longitude) * (b.longitude - a.longitude)))
+        .clamp(0.0, 1.0);
+    final projLat = a.latitude + t * (b.latitude - a.latitude);
+    final projLng = a.longitude + t * (b.longitude - a.longitude);
+    return _haversine(p, LatLng(projLat, projLng));
+  }
+
+  /// Advance step index when driver is within 40 m of the next step's start.
+  void _updateCurrentStep() {
+    if (_navSteps.isEmpty) return;
+    // Skip past steps we've already passed
+    while (_currentStepIndex < _navSteps.length - 1) {
+      final nextStart = _navSteps[_currentStepIndex + 1].startLocation;
+      if (_haversine(_currentPosition, nextStart) < 40) {
+        _currentStepIndex++;
+      } else {
+        break;
+      }
+    }
+    final step = _navSteps[_currentStepIndex];
+    _nextInstruction = step.instruction;
+    _nextStepDistance = step.distanceText;
+    _nextManeuver = step.maneuver;
   }
 
   void _fitBounds() {
@@ -254,6 +356,24 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
 
       // Feed into the premium animator (handles smoothing + interpolation)
       _vehicleAnimator?.pushPosition(newPos, bearing: pos.heading);
+
+      // Update navigation step tracking
+      if (_navSteps.isNotEmpty && mounted) {
+        setState(() => _updateCurrentStep());
+      }
+
+      // Route deviation detection — auto-reroute when off-track
+      if (_routePoints.isNotEmpty) {
+        final distFromRoute = _minDistanceToPolyline(newPos, _routePoints);
+        if (distFromRoute > _deviationThreshold) {
+          final now = DateTime.now();
+          // Throttle: at most one reroute every 10 seconds
+          if (now.difference(_lastRouteRefresh).inSeconds > 10) {
+            _lastRouteRefresh = now;
+            _fetchRoute();
+          }
+        }
+      }
 
       // Follow driver in driving mode
       if (_drivingMode) {
@@ -358,7 +478,15 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
   Future<void> _arrivedAtPickup() async {
     try {
       await _api.dio.post(ApiConstants.arrivedAtPickup(widget.rideId));
-      setState(() => _status = 'driver_arrived');
+      setState(() {
+        _status = 'driver_arrived';
+        _currentStepIndex = 0;
+        _navSteps = [];
+        _nextInstruction = '';
+        _nextStepDistance = '';
+        _nextManeuver = '';
+      });
+      _fetchRoute(); // redraw route — now points to destination
     } on DioException catch (e) {
       if (mounted) {
         AppAlert.showDioError(context, e,
@@ -373,6 +501,11 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
       setState(() {
         _status = 'in_progress';
         _drivingMode = true;
+        _currentStepIndex = 0;
+        _navSteps = [];
+        _nextInstruction = '';
+        _nextStepDistance = '';
+        _nextManeuver = '';
       });
       _fetchRoute();
     } on DioException catch (e) {
@@ -450,6 +583,28 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
     final phone = _rideData?['passenger']?['phone'];
     if (phone != null) {
       launchUrl(Uri.parse('tel:$phone'));
+    }
+  }
+
+  /// Open external Google Maps navigation to current target.
+  Future<void> _openExternalNav() async {
+    final destination = _status == 'in_progress'
+        ? _dropoffLatLng
+        : (_status == 'accepted' || _status == 'driver_arriving'
+            ? _pickupLatLng
+            : _dropoffLatLng);
+    if (destination == null) return;
+    final url = Uri.parse(
+      'google.navigation:q=${destination.latitude},${destination.longitude}&mode=d',
+    );
+    if (await canLaunchUrl(url)) {
+      await launchUrl(url);
+    } else {
+      // Fallback to web Google Maps
+      final webUrl = Uri.parse(
+        'https://www.google.com/maps/dir/?api=1&destination=${destination.latitude},${destination.longitude}&travelmode=driving',
+      );
+      await launchUrl(webUrl, mode: LaunchMode.externalApplication);
     }
   }
 
@@ -595,11 +750,16 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
             // ── Map ──
             _buildMap(),
 
-            // ── Top Info Card ──
-            if (!_drivingMode) _buildTopInfoCard(),
+            // ── Navigation instruction bar (turn-by-turn) ──
+            if (_nextInstruction.isNotEmpty &&
+                (_status == 'accepted' || _status == 'driver_arriving' || _status == 'in_progress'))
+              _buildNavInstructionBar(),
+
+            // ── Top Info Card (only when no nav instruction or not driving) ──
+            if (!_drivingMode && _nextInstruction.isEmpty) _buildTopInfoCard(),
 
             // ── Driving mode ETA strip ──
-            if (_drivingMode) _buildDrivingEtaStrip(),
+            if (_drivingMode && _nextInstruction.isEmpty) _buildDrivingEtaStrip(),
 
             // ── Right floating buttons ──
             _buildFloatingButtons(),
@@ -821,6 +981,153 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
     );
   }
 
+  // ─────────────────────────────────────────────── Nav Instruction Bar ────────
+  Widget _buildNavInstructionBar() {
+    return Positioned(
+      top: MediaQuery.of(context).padding.top + 8.h,
+      left: 16.w,
+      right: 72.w,
+      child: Container(
+        padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 12.h),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1A73E8),
+          borderRadius: BorderRadius.circular(14.r),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF1A73E8).withOpacity(0.35),
+              blurRadius: 14,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Maneuver icon + instruction
+            Row(
+              children: [
+                Container(
+                  width: 42.w,
+                  height: 42.w,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(12.r),
+                  ),
+                  child: Icon(
+                    _maneuverIcon(_nextManeuver),
+                    color: Colors.white,
+                    size: 24.sp,
+                  ),
+                ),
+                SizedBox(width: 12.w),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (_nextStepDistance.isNotEmpty)
+                        Text(
+                          _nextStepDistance,
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 20.sp,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      Text(
+                        _nextInstruction,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.9),
+                          fontSize: 13.sp,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            // ETA bar
+            if (_etaText.isNotEmpty) ...[
+              SizedBox(height: 8.h),
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: 10.w, vertical: 6.h),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(8.r),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.access_time_rounded, color: Colors.white70, size: 14.sp),
+                    SizedBox(width: 6.w),
+                    Text(
+                      _etaText,
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 12.sp,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    SizedBox(width: 12.w),
+                    Container(width: 1, height: 12.h, color: Colors.white30),
+                    SizedBox(width: 12.w),
+                    Icon(Icons.straighten_rounded, color: Colors.white70, size: 14.sp),
+                    SizedBox(width: 6.w),
+                    Text(
+                      _distanceText,
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.9),
+                        fontSize: 12.sp,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Map Google Directions maneuver string → icon.
+  IconData _maneuverIcon(String maneuver) {
+    switch (maneuver) {
+      case 'turn-left':
+      case 'fork-left':
+      case 'ramp-left':
+        return Icons.turn_left_rounded;
+      case 'turn-right':
+      case 'fork-right':
+      case 'ramp-right':
+        return Icons.turn_right_rounded;
+      case 'turn-slight-left':
+        return Icons.turn_slight_left_rounded;
+      case 'turn-slight-right':
+        return Icons.turn_slight_right_rounded;
+      case 'turn-sharp-left':
+        return Icons.turn_sharp_left_rounded;
+      case 'turn-sharp-right':
+        return Icons.turn_sharp_right_rounded;
+      case 'uturn-left':
+        return Icons.u_turn_left_rounded;
+      case 'uturn-right':
+        return Icons.u_turn_right_rounded;
+      case 'roundabout-left':
+      case 'roundabout-right':
+        return Icons.roundabout_left_rounded;
+      case 'merge':
+        return Icons.merge_rounded;
+      case 'straight':
+        return Icons.straight_rounded;
+      default:
+        return Icons.navigation_rounded;
+    }
+  }
+
   // ─────────────────────────────────────────────── Floating Buttons ──────────
   Widget _buildFloatingButtons() {
     return Positioned(
@@ -833,6 +1140,13 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
             icon: Icons.phone_rounded,
             onTap: _callPassenger,
             tooltip: 'Appeler',
+          ),
+          SizedBox(height: 10.h),
+          // External navigation (Google Maps)
+          _FloatingBtn(
+            icon: Icons.map_rounded,
+            onTap: _openExternalNav,
+            tooltip: 'Google Maps',
           ),
           SizedBox(height: 10.h),
           // Driving mode toggle

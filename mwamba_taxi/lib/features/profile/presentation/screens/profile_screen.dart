@@ -808,33 +808,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
               title: 'Changer le mot de passe',
               onTap: _showChangePasswordDialog,
             ),
-            _divider(),
-            _MenuItem(
-              icon: Icons.history_rounded,
-              title: 'Historique des courses',
-              onTap: () => context.go('/history'),
-            ),
-            _divider(),
-            _MenuItem(
-              icon: Icons.card_giftcard_rounded,
-              title: 'Code promo',
-              onTap: _showPromoDialog,
-            ),
-            _divider(),
-            _MenuItem(
-              icon: Icons.share_rounded,
-              title: 'Parrainage',
-              subtitle: _profile!['referral_code'] != null
-                  ? 'Code: ${_profile!['referral_code']}'
-                  : null,
-              onTap: _showReferralSheet,
-            ),
-            _divider(),
-            _MenuItem(
-              icon: Icons.info_outline_rounded,
-              title: 'À propos',
-              onTap: () {},
-            ),
           ],
         ),
       ),

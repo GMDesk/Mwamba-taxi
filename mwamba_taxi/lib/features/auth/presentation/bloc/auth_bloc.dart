@@ -62,6 +62,8 @@ class AuthOtpVerified extends AuthEvent {
 
 class AuthLogoutRequested extends AuthEvent {}
 
+class AuthSessionExpired extends AuthEvent {}
+
 // ---------------------------------------------------------------------------
 // States
 // ---------------------------------------------------------------------------
@@ -99,6 +101,8 @@ class AuthError extends AuthState {
   List<Object?> get props => [message];
 }
 
+class AuthSessionExpiredState extends AuthState {}
+
 // ---------------------------------------------------------------------------
 // BLoC
 // ---------------------------------------------------------------------------
@@ -112,19 +116,27 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
     on<AuthOtpRequested>(_onRequestOtp);
     on<AuthOtpVerified>(_onVerifyOtp);
     on<AuthLogoutRequested>(_onLogout);
+    on<AuthSessionExpired>(_onSessionExpired);
   }
 
   Future<void> _onCheckAuth(AuthCheckRequested event, Emitter<AuthState> emit) async {
-    final isAuth = await _apiClient.isAuthenticated();
-    if (isAuth) {
-      try {
-        final response = await _apiClient.dio.get(ApiConstants.profile);
-        emit(AuthAuthenticated(user: response.data));
-      } catch (_) {
+    final sessionOk = await _apiClient.isSessionValid();
+    if (!sessionOk) {
+      await _apiClient.clearTokens();
+      emit(AuthUnauthenticated());
+      return;
+    }
+    try {
+      final response = await _apiClient.dio.get(ApiConstants.profile);
+      final role = response.data['role'];
+      if (role != null && role != 'passenger') {
         await _apiClient.clearTokens();
-        emit(AuthUnauthenticated());
+        emit(AuthError(message: 'Ce compte est un compte chauffeur. Veuillez utiliser l\'application chauffeur.'));
+        return;
       }
-    } else {
+      emit(AuthAuthenticated(user: response.data));
+    } catch (_) {
+      await _apiClient.clearTokens();
       emit(AuthUnauthenticated());
     }
   }
@@ -151,7 +163,15 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
         access: tokens['access'],
         refresh: tokens['refresh'],
       );
-      emit(AuthAuthenticated(user: response.data['user']));
+      await _apiClient.stampLoginTime();
+      final user = response.data['user'];
+      final role = user?['role'];
+      if (role != null && role != 'passenger') {
+        await _apiClient.clearTokens();
+        emit(AuthError(message: 'Ce compte est un compte chauffeur. Veuillez utiliser l\'application chauffeur.'));
+        return;
+      }
+      emit(AuthAuthenticated(user: user));
     } catch (e) {
       emit(AuthError(message: _extractError(e)));
     }
@@ -174,6 +194,7 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
         access: tokens['access'],
         refresh: tokens['refresh'],
       );
+      await _apiClient.stampLoginTime();
       emit(AuthAuthenticated(user: response.data['user']));
     } catch (e) {
       emit(AuthError(message: _extractError(e)));
@@ -208,7 +229,15 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
         access: tokens['access'],
         refresh: tokens['refresh'],
       );
-      emit(AuthAuthenticated(user: response.data['user']));
+      await _apiClient.stampLoginTime();
+      final user = response.data['user'];
+      final role = user?['role'];
+      if (role != null && role != 'passenger') {
+        await _apiClient.clearTokens();
+        emit(AuthError(message: 'Ce compte est un compte chauffeur. Veuillez utiliser l\'application chauffeur.'));
+        return;
+      }
+      emit(AuthAuthenticated(user: user));
     } catch (e) {
       emit(AuthError(message: _extractError(e)));
     }
@@ -224,6 +253,11 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
       await _apiClient.clearTokens();
       emit(AuthUnauthenticated());
     }
+  }
+
+  Future<void> _onSessionExpired(AuthSessionExpired event, Emitter<AuthState> emit) async {
+    await _apiClient.clearTokens();
+    emit(AuthSessionExpiredState());
   }
 
   String _extractError(dynamic e) {

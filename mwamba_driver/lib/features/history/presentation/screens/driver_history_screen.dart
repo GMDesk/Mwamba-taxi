@@ -187,19 +187,31 @@ class _StatusBadge extends StatelessWidget {
   Color _color() {
     switch (status) {
       case 'completed': return AppColors.success;
-      case 'cancelled': return AppColors.error;
+      case 'cancelled':
+      case 'cancelled_by_driver':
+      case 'cancelled_by_passenger': return AppColors.error;
       case 'in_progress': return AppColors.secondary;
+      case 'accepted':
+      case 'driver_arriving': return AppColors.info;
+      case 'driver_arrived': return AppColors.primary;
+      case 'requested': return AppColors.warning;
+      case 'no_driver': return AppColors.textHint;
       default: return AppColors.textHint;
     }
   }
 
   String _label() {
     switch (status) {
+      case 'requested': return 'En attente';
       case 'accepted': return 'Acceptée';
+      case 'driver_arriving': return 'En route';
       case 'driver_arrived': return 'Arrivé';
       case 'in_progress': return 'En cours';
       case 'completed': return 'Terminée';
       case 'cancelled': return 'Annulée';
+      case 'cancelled_by_driver': return 'Annulée (chauffeur)';
+      case 'cancelled_by_passenger': return 'Annulée (passager)';
+      case 'no_driver': return 'Aucun chauffeur';
       default: return status;
     }
   }

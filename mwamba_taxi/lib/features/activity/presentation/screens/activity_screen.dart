@@ -265,6 +265,10 @@ class _StatusBadge extends StatelessWidget {
         label = 'Terminée';
         break;
       case 'cancelled':
+      case 'cancelled_by_passenger':
+      case 'cancelled_by_driver':
+      case 'cancelled_passenger':
+      case 'cancelled_driver':
         bg = AppColors.error.withOpacity(0.1);
         fg = AppColors.error;
         label = 'Annulée';
@@ -274,10 +278,31 @@ class _StatusBadge extends StatelessWidget {
         fg = AppColors.info;
         label = 'En cours';
         break;
+      case 'requested':
+        bg = AppColors.warning.withOpacity(0.1);
+        fg = AppColors.warning;
+        label = 'En attente';
+        break;
+      case 'accepted':
+      case 'driver_arriving':
+        bg = AppColors.info.withOpacity(0.1);
+        fg = AppColors.info;
+        label = 'Chauffeur en route';
+        break;
+      case 'driver_arrived':
+        bg = AppColors.success.withOpacity(0.1);
+        fg = AppColors.success;
+        label = 'Chauffeur arrivé';
+        break;
+      case 'no_driver':
+        bg = AppColors.error.withOpacity(0.1);
+        fg = AppColors.error;
+        label = 'Aucun chauffeur';
+        break;
       default:
         bg = AppColors.warning.withOpacity(0.1);
         fg = AppColors.warning;
-        label = status.isNotEmpty ? status : 'En attente';
+        label = 'En attente';
     }
 
     return Container(

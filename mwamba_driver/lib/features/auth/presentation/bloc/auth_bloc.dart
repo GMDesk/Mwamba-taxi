@@ -65,6 +65,8 @@ class VerifyOtpEvent extends AuthEvent {
 
 class LogoutEvent extends AuthEvent {}
 
+class AuthSessionExpired extends AuthEvent {}
+
 // States
 abstract class AuthState extends Equatable {
   @override
@@ -88,6 +90,8 @@ class AuthError extends AuthState {
   List<Object?> get props => [message];
 }
 
+class AuthSessionExpiredState extends AuthState {}
+
 // BLoC
 class AuthBloc extends Bloc<AuthEvent, AuthState> {
   final ApiClient _api = getIt<ApiClient>();
@@ -99,11 +103,28 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
     on<RequestOtpEvent>(_onRequestOtp);
     on<VerifyOtpEvent>(_onVerifyOtp);
     on<LogoutEvent>(_onLogout);
+    on<AuthSessionExpired>(_onSessionExpired);
   }
 
   Future<void> _onCheck(CheckAuthEvent event, Emitter<AuthState> emit) async {
-    final has = await _api.hasTokens();
-    emit(has ? Authenticated() : Unauthenticated());
+    final valid = await _api.isSessionValid();
+    if (!valid) {
+      emit(Unauthenticated());
+      return;
+    }
+    try {
+      final response = await _api.dio.get(ApiConstants.profile);
+      final role = response.data['role'];
+      if (role != null && role != 'driver') {
+        await _api.clearTokens();
+        emit(AuthError('Ce compte est un compte passager. Veuillez utiliser l\'application passager.'));
+        return;
+      }
+      emit(Authenticated());
+    } catch (_) {
+      await _api.clearTokens();
+      emit(Unauthenticated());
+    }
   }
 
   Future<void> _onLogin(LoginEvent event, Emitter<AuthState> emit) async {
@@ -115,6 +136,14 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
       });
       final tokens = resp.data['tokens'];
       await _api.saveTokens(tokens['access'], tokens['refresh']);
+      await _api.stampLoginTime();
+      final user = resp.data['user'];
+      final role = user?['role'];
+      if (role != null && role != 'driver') {
+        await _api.clearTokens();
+        emit(AuthError('Ce compte est un compte passager. Veuillez utiliser l\'application passager.'));
+        return;
+      }
       emit(Authenticated());
     } on DioException catch (e) {
       final data = e.response?.data;
@@ -156,6 +185,7 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
       final tokens = resp.data['tokens'];
       if (tokens != null) {
         await _api.saveTokens(tokens['access'], tokens['refresh']);
+        await _api.stampLoginTime();
       }
       emit(Authenticated());
     } on DioException catch (e) {
@@ -211,6 +241,7 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
       });
       final tokens = resp.data['tokens'];
       await _api.saveTokens(tokens['access'], tokens['refresh']);
+      await _api.stampLoginTime();
       emit(Authenticated());
     } catch (e) {
       emit(AuthError('Code invalide'));
@@ -220,5 +251,11 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
   Future<void> _onLogout(LogoutEvent event, Emitter<AuthState> emit) async {
     await _api.clearTokens();
     emit(Unauthenticated());
+  }
+
+  Future<void> _onSessionExpired(
+      AuthSessionExpired event, Emitter<AuthState> emit) async {
+    await _api.clearTokens();
+    emit(AuthSessionExpiredState());
   }
 }
