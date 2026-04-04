@@ -2,6 +2,7 @@ import uuid
 
 from django.conf import settings
 from django.contrib.postgres.fields import ArrayField
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
 
@@ -38,19 +39,23 @@ class Ride(models.Model):
     # Pickup
     pickup_address = models.CharField("Adresse de départ", max_length=300)
     pickup_latitude = models.DecimalField(
-        "Latitude départ", max_digits=10, decimal_places=7
+        "Latitude départ", max_digits=10, decimal_places=7,
+        validators=[MinValueValidator(-90), MaxValueValidator(90)],
     )
     pickup_longitude = models.DecimalField(
-        "Longitude départ", max_digits=10, decimal_places=7
+        "Longitude départ", max_digits=10, decimal_places=7,
+        validators=[MinValueValidator(-180), MaxValueValidator(180)],
     )
 
     # Destination
     destination_address = models.CharField("Adresse d'arrivée", max_length=300)
     destination_latitude = models.DecimalField(
-        "Latitude arrivée", max_digits=10, decimal_places=7
+        "Latitude arrivée", max_digits=10, decimal_places=7,
+        validators=[MinValueValidator(-90), MaxValueValidator(90)],
     )
     destination_longitude = models.DecimalField(
-        "Longitude arrivée", max_digits=10, decimal_places=7
+        "Longitude arrivée", max_digits=10, decimal_places=7,
+        validators=[MinValueValidator(-180), MaxValueValidator(180)],
     )
 
     # Distance & duration

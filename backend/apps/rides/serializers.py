@@ -90,7 +90,7 @@ class SOSAlertSerializer(serializers.ModelSerializer):
 
 
 class RideCancelSerializer(serializers.Serializer):
-    reason = serializers.CharField(required=False, allow_blank=True, default="")
+    reason = serializers.CharField(required=False, allow_blank=True, default="", max_length=500)
 
 
 class EstimatePriceSerializer(serializers.Serializer):

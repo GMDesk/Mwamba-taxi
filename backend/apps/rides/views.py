@@ -259,6 +259,13 @@ class TimeoutRideAssignmentView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        # Only the passenger or the assigned driver can timeout
+        if request.user != ride.passenger and request.user != ride.assigned_driver:
+            return Response(
+                {"detail": "Non autorisé."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         # Only allow if assignment has actually expired or the caller is the passenger
         if ride.assigned_driver:
             declined = ride.declined_driver_ids or []
@@ -387,8 +394,9 @@ class CompleteRideView(APIView):
     permission_classes = [permissions.IsAuthenticated, IsApprovedDriver]
 
     def post(self, request, ride_id):
+        from django.db import transaction as db_transaction
         try:
-            ride = Ride.objects.get(
+            ride = Ride.objects.select_for_update().get(
                 id=ride_id,
                 driver=request.user,
                 status=Ride.Status.IN_PROGRESS,

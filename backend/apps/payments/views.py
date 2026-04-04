@@ -431,7 +431,7 @@ class PawapayActiveCorrespondentsView(APIView):
 
     def get(self, request):
         result = pawapay.get_active_correspondents()
-        expected = {"VODACOM_CD", "AIRTEL_CD", "ORANGE_CD"}
+        expected = {"VODACOM_MPESA_COD", "AIRTEL_COD", "ORANGE_COD"}
         active_ids = set()
         for c in result.get("correspondents", []):
             if isinstance(c, dict):

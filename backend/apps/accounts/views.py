@@ -344,8 +344,7 @@ class DriverStatusView(APIView):
 class NearbyDriversView(APIView):
     """Get nearby available drivers (for passengers)."""
 
-    authentication_classes = []
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         lat = request.query_params.get("latitude")

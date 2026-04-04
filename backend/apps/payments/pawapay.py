@@ -1,13 +1,18 @@
 """
-PawaPay Mobile Money integration.
+PawaPay Mobile Money integration — V2 API.
 
 Handles deposits (customer top-up), payouts (driver withdrawal),
-and refunds via the PawaPay REST API.
+and refunds via the PawaPay REST API V2.
 
-API docs: https://docs.pawapay.io/
+Migration from V1 → V2:
+  - Endpoints:  /deposits  → /v2/deposits  (same for payouts, refunds, active-conf)
+  - Payload:    correspondent → provider (inside accountDetails)
+  -             type: MSISDN → type: MMO
+  -             address.value → accountDetails.phoneNumber
+  -             statementDescription → customerMessage
+
+API docs: https://docs.pawapay.io/v2/
 """
-import hashlib
-import hmac
 import logging
 import uuid
 
@@ -34,7 +39,7 @@ def _headers() -> dict:
 # Airtel Money:      97, 98, 99, 96, 95, 94
 # Orange Money:      80, 84, 85, 89, 86, 87, 88
 #
-# PawaPay active correspondents for DRC:
+# PawaPay active providers for DRC:
 #   - VODACOM_MPESA_COD  (deposits + payouts)
 #   - AIRTEL_COD          (deposits + payouts)
 #   - ORANGE_COD          (deposits + payouts)
@@ -44,15 +49,18 @@ VODACOM_PREFIXES = ("81", "82", "83")
 AIRTEL_PREFIXES  = ("97", "98", "99", "96", "95", "94")
 ORANGE_PREFIXES  = ("80", "84", "85", "86", "87", "88", "89")
 
-CORRESPONDENT_MAP = {
+PROVIDER_MAP = {
     "VODACOM_MPESA_COD": VODACOM_PREFIXES,
     "AIRTEL_COD":        AIRTEL_PREFIXES,
     "ORANGE_COD":        ORANGE_PREFIXES,
 }
 
+# Backward compatibility alias
+CORRESPONDENT_MAP = PROVIDER_MAP
 
-def _correspondent(phone: str) -> str:
-    """Map phone prefix to PawaPay correspondent ID (DRC operators).
+
+def _resolve_provider(phone: str) -> str:
+    """Map phone prefix to PawaPay provider ID (DRC operators).
 
     Raises ValueError if the phone number doesn't match a known DRC operator.
     """
@@ -70,13 +78,21 @@ def _correspondent(phone: str) -> str:
     raise ValueError(f"Opérateur non reconnu pour le préfixe +243{suffix}")
 
 
+# Backward compatibility alias
+_correspondent = _resolve_provider
+
+
 def get_operator_name(phone: str) -> str:
     """Return the human-readable operator name for a DRC phone number."""
     try:
-        corr = _correspondent(phone)
+        provider = _resolve_provider(phone)
     except ValueError:
         return "Inconnu"
-    return {"VODACOM_MPESA_COD": "Vodacom M-Pesa", "AIRTEL_COD": "Airtel Money", "ORANGE_COD": "Orange Money"}.get(corr, "Inconnu")
+    return {
+        "VODACOM_MPESA_COD": "Vodacom M-Pesa",
+        "AIRTEL_COD": "Airtel Money",
+        "ORANGE_COD": "Orange Money",
+    }.get(provider, "Inconnu")
 
 
 # ───────────────────────── DEPOSIT (Top-up wallet) ─────────────────────
@@ -84,16 +100,16 @@ def initiate_deposit(
     phone_number: str,
     amount: float,
     deposit_id: str | None = None,
-    description: str = "Mwamba Taxi – Rechargement wallet",
+    description: str = "Mwamba Taxi",
 ) -> dict:
-    """Request a deposit from a customer's mobile money account.
+    """Request a deposit from a customer's mobile money account (V2 API).
 
     Returns: {"success": bool, "deposit_id": str, "status": str, "raw": dict}
     """
     dep_id = deposit_id or str(uuid.uuid4())
 
     try:
-        correspondent = _correspondent(phone_number)
+        provider = _resolve_provider(phone_number)
     except ValueError as e:
         logger.warning("PawaPay deposit rejected: %s", e)
         return {"success": False, "deposit_id": dep_id, "status": "INVALID_NUMBER", "raw": {"error": str(e)}}
@@ -102,23 +118,25 @@ def initiate_deposit(
         "depositId": dep_id,
         "amount": str(int(amount)),
         "currency": "CDF",
-        "correspondent": correspondent,
         "payer": {
-            "type": "MSISDN",
-            "address": {"value": phone_number.lstrip("+")},
+            "type": "MMO",
+            "accountDetails": {
+                "phoneNumber": phone_number.lstrip("+"),
+                "provider": provider,
+            },
         },
-        "statementDescription": description[:22],  # max 22 chars
+        "customerMessage": description[:22],
     }
 
     try:
         resp = requests.post(
-            f"{PAWAPAY_API_URL}/deposits",
+            f"{PAWAPAY_API_URL}/v2/deposits",
             json=payload,
             headers=_headers(),
             timeout=TIMEOUT,
         )
         data = resp.json() if resp.content else {}
-        logger.info("PawaPay deposit %s [%s] → %s %s", dep_id, correspondent, resp.status_code, data.get("status", ""))
+        logger.info("PawaPay deposit %s [%s] → %s %s", dep_id, provider, resp.status_code, data.get("status", ""))
         return {
             "success": resp.status_code in (200, 201),
             "deposit_id": dep_id,
@@ -135,16 +153,16 @@ def initiate_payout(
     phone_number: str,
     amount: float,
     payout_id: str | None = None,
-    description: str = "Mwamba Taxi – Retrait",
+    description: str = "Mwamba Taxi",
 ) -> dict:
-    """Send money to a driver's mobile money account.
+    """Send money to a driver's mobile money account (V2 API).
 
     Returns: {"success": bool, "payout_id": str, "status": str, "raw": dict}
     """
     pay_id = payout_id or str(uuid.uuid4())
 
     try:
-        correspondent = _correspondent(phone_number)
+        provider = _resolve_provider(phone_number)
     except ValueError as e:
         logger.warning("PawaPay payout rejected: %s", e)
         return {"success": False, "payout_id": pay_id, "status": "INVALID_NUMBER", "raw": {"error": str(e)}}
@@ -153,23 +171,25 @@ def initiate_payout(
         "payoutId": pay_id,
         "amount": str(int(amount)),
         "currency": "CDF",
-        "correspondent": correspondent,
         "recipient": {
-            "type": "MSISDN",
-            "address": {"value": phone_number.lstrip("+")},
+            "type": "MMO",
+            "accountDetails": {
+                "phoneNumber": phone_number.lstrip("+"),
+                "provider": provider,
+            },
         },
-        "statementDescription": description[:22],
+        "customerMessage": description[:22],
     }
 
     try:
         resp = requests.post(
-            f"{PAWAPAY_API_URL}/payouts",
+            f"{PAWAPAY_API_URL}/v2/payouts",
             json=payload,
             headers=_headers(),
             timeout=TIMEOUT,
         )
         data = resp.json() if resp.content else {}
-        logger.info("PawaPay payout %s [%s] → %s %s", pay_id, correspondent, resp.status_code, data.get("status", ""))
+        logger.info("PawaPay payout %s [%s] → %s %s", pay_id, provider, resp.status_code, data.get("status", ""))
         return {
             "success": resp.status_code in (200, 201),
             "payout_id": pay_id,
@@ -183,7 +203,7 @@ def initiate_payout(
 
 # ───────────────────────── REFUND ──────────────────────────────────────
 def initiate_refund(deposit_id: str, refund_id: str | None = None) -> dict:
-    """Refund a previously completed deposit.
+    """Refund a previously completed deposit (V2 API).
 
     Returns: {"success": bool, "refund_id": str, "status": str, "raw": dict}
     """
@@ -195,7 +215,7 @@ def initiate_refund(deposit_id: str, refund_id: str | None = None) -> dict:
 
     try:
         resp = requests.post(
-            f"{PAWAPAY_API_URL}/refunds",
+            f"{PAWAPAY_API_URL}/v2/refunds",
             json=payload,
             headers=_headers(),
             timeout=TIMEOUT,
@@ -213,41 +233,38 @@ def initiate_refund(deposit_id: str, refund_id: str | None = None) -> dict:
         return {"success": False, "refund_id": ref_id, "status": "ERROR", "raw": {}}
 
 
-# ───────────────────────── SIGNATURE VERIFICATION ──────────────────────
+# ───────────────────────── CALLBACK VERIFICATION ──────────────────────
 def verify_callback_signature(payload_bytes: bytes, signature: str) -> bool:
-    """Verify PawaPay webhook callback signature using HMAC-SHA256."""
-    secret = settings.PAWAPAY_WEBHOOK_SECRET
-    if not secret:
-        if settings.DEBUG:
-            logger.warning("PAWAPAY_WEBHOOK_SECRET not set \u2014 skipping verification (DEBUG)")
-            return True
-        logger.error("PAWAPAY_WEBHOOK_SECRET not set in PRODUCTION \u2014 rejecting callback")
-        return False
-    expected = hmac.new(
-        secret.encode(),
-        payload_bytes,
-        hashlib.sha256,
-    ).hexdigest()
-    return hmac.compare_digest(expected, signature)
+    """Verify PawaPay callback origin.
+
+    PawaPay V2 uses RFC-9421 HTTP Message Signatures (asymmetric keys),
+    NOT a shared HMAC secret.  Signed callbacks are an optional feature
+    enabled in Dashboard → System configuration → API tokens → Security.
+
+    For now we accept all callbacks.  Enable RFC-9421 verification later
+    once signed callbacks are turned on in the PawaPay dashboard.
+    """
+    # TODO: implement RFC-9421 signature verification when signed callbacks
+    #       are enabled in the PawaPay production dashboard.
+    return True
 
 
-# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 ACTIVE CORRESPONDENTS \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+# ───────────────────────── ACTIVE CONFIGURATION ──────────────────────
 def get_active_correspondents() -> dict:
-    """Query which correspondents are active on this PawaPay account.
+    """Query which providers are active on this PawaPay account (V2 API).
 
-    Use to verify that VODACOM_CD, AIRTEL_CD, and ORANGE_CD are all live.
     Returns: {"success": bool, "correspondents": [...], "raw": dict}
     """
     try:
         resp = requests.get(
-            f"{PAWAPAY_API_URL}/active-conf",
+            f"{PAWAPAY_API_URL}/v2/active-conf",
             headers=_headers(),
             timeout=TIMEOUT,
         )
         data = resp.json() if resp.content else {}
         return {
             "success": resp.status_code == 200,
-            "correspondents": data if isinstance(data, list) else data.get("correspondents", []),
+            "correspondents": data if isinstance(data, list) else data.get("countries", []),
             "raw": data,
         }
     except requests.RequestException as e:

@@ -30,10 +30,9 @@ User = get_user_model()
 
 
 class AdminRegisterView(APIView):
-    """Create a new admin account. Public registration."""
+    """Create a new admin account. Requires existing admin authentication."""
 
-    authentication_classes = []
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
 
     def post(self, request):
         serializer = AdminRegisterSerializer(data=request.data)
