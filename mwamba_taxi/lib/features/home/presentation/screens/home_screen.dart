@@ -291,6 +291,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   }
 
   Future<void> _loadNearbyDrivers() async {
+    if (!mounted) return;
     try {
       final response = await _api.dio.get(
         ApiConstants.nearbyDrivers,
@@ -301,6 +302,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           'vehicle_category': _vehicleCategories[_selectedVehicle],
         },
       );
+      if (!mounted) return;
 
       final drivers = response.data as List;
       final Set<Marker> driverMarkers = {};
@@ -311,6 +313,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           zoom: _currentZoom,
           state: VehicleState.available,
         );
+        if (!mounted) return;
         driverMarkers.add(Marker(
           markerId: MarkerId('driver_${d['id']}'),
           position: LatLng(
@@ -327,6 +330,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         ));
       }
 
+      if (!mounted) return;
       setState(() {
         _markers.removeWhere((m) => m.markerId.value.startsWith('driver_'));
         _markers.addAll(driverMarkers);
@@ -349,6 +353,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           'destination_longitude': _destinationLocation!.longitude,
         },
       );
+      if (!mounted) return;
 
       setState(() => _priceEstimate = response.data);
 

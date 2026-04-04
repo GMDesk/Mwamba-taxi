@@ -421,6 +421,7 @@ class _ActiveRideScreenState extends State<ActiveRideScreen>
     // Heartbeat to keep connection alive
     _heartbeatTimer?.cancel();
     _heartbeatTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (_disposed) { _heartbeatTimer?.cancel(); return; }
       try {
         _ws?.sink.add(jsonEncode({'type': 'heartbeat'}));
       } catch (_) {}

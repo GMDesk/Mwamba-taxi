@@ -168,7 +168,7 @@ class _EarningsScreenState extends State<EarningsScreen> {
                 TextField(
                   controller: phoneCtrl,
                   keyboardType: TextInputType.phone,
-                  onChanged: (_) => setSheetState(() {}),
+                  onChanged: (_) { if (ctx.mounted) setSheetState(() {}); },
                   decoration: InputDecoration(
                     labelText: 'Numéro Mobile Money',
                     hintText: '0XX XXX XXXX',
@@ -253,7 +253,8 @@ class _EarningsScreenState extends State<EarningsScreen> {
                                 ApiConstants.payoutRequest,
                                 data: {'amount': amount, 'phone_number': phone},
                               );
-                              if (ctx.mounted) Navigator.pop(ctx);
+                              if (!ctx.mounted) return;
+                              Navigator.pop(ctx);
                               _load();
                               if (mounted) {
                                 ScaffoldMessenger.of(context).showSnackBar(
@@ -262,16 +263,17 @@ class _EarningsScreenState extends State<EarningsScreen> {
                                 );
                               }
                             } on DioException catch (e) {
+                              if (!ctx.mounted) return;
                               setSheetState(() => sending = false);
-                              if (ctx.mounted) {
-                                final errData = e.response?.data;
-                                final msg = errData is Map
-                                    ? (errData['detail'] ?? 'Erreur lors du retrait')
-                                    : 'Erreur lors du retrait';
-                                ScaffoldMessenger.of(ctx).showSnackBar(
-                                  SnackBar(content: Text(msg.toString())),
-                                );
-                              }
+                              final errData = e.response?.data;
+                              final msg = errData is Map
+                                  ? (errData['detail'] ?? 'Erreur lors du retrait')
+                                  : 'Erreur lors du retrait';
+                              ScaffoldMessenger.of(ctx).showSnackBar(
+                                SnackBar(content: Text(msg.toString())),
+                              );
+                            } catch (_) {
+                              if (ctx.mounted) setSheetState(() => sending = false);
                             }
                           },
                     style: ElevatedButton.styleFrom(

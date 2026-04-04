@@ -158,7 +158,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
               TextField(
                 controller: phoneCtrl,
                 keyboardType: TextInputType.phone,
-                onChanged: (_) => setSheetState(() {}),
+                onChanged: (_) { if (ctx.mounted) setSheetState(() {}); },
                 decoration: InputDecoration(
                   labelText: 'Numéro Mobile Money',
                   hintText: '0XX XXX XXXX',
@@ -247,7 +247,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
                                 'phone_number': phone,
                               },
                             );
-                            if (ctx.mounted) Navigator.pop(ctx);
+                            if (!ctx.mounted) return;
+                            Navigator.pop(ctx);
                             _loadData();
                             if (mounted) {
                               ScaffoldMessenger.of(context).showSnackBar(
@@ -257,16 +258,17 @@ class _PaymentScreenState extends State<PaymentScreen> {
                               );
                             }
                           } on DioException catch (e) {
+                            if (!ctx.mounted) return;
                             setSheetState(() => depositing = false);
-                            if (ctx.mounted) {
-                              final errData = e.response?.data;
-                              final msg = errData is Map
-                                  ? (errData['detail'] ?? 'Erreur lors du dépôt')
-                                  : 'Erreur lors du dépôt';
-                              ScaffoldMessenger.of(ctx).showSnackBar(
-                                SnackBar(content: Text(msg.toString())),
-                              );
-                            }
+                            final errData = e.response?.data;
+                            final msg = errData is Map
+                                ? (errData['detail'] ?? 'Erreur lors du dépôt')
+                                : 'Erreur lors du dépôt';
+                            ScaffoldMessenger.of(ctx).showSnackBar(
+                              SnackBar(content: Text(msg.toString())),
+                            );
+                          } catch (_) {
+                            if (ctx.mounted) setSheetState(() => depositing = false);
                           }
                         },
                   style: ElevatedButton.styleFrom(

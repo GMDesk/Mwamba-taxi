@@ -59,7 +59,7 @@ class _WelcomeScreenState extends State<WelcomeScreen>
           children: [
             // ── Background photo ──
             Image.asset(
-              'assets/images/welcome.avif',
+              'assets/images/welcome.webp',
               fit: BoxFit.cover,
             ),
 
