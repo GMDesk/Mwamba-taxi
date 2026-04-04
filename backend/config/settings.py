@@ -264,7 +264,8 @@ TWILIO_PHONE_NUMBER = env("TWILIO_PHONE_NUMBER", default="")
 PAWAPAY_API_TOKEN = env("PAWAPAY_API_TOKEN", default="")
 PAWAPAY_WEBHOOK_SECRET = env("PAWAPAY_WEBHOOK_SECRET", default="")
 PAWAPAY_API_URL = env("PAWAPAY_API_URL", default="https://api.sandbox.pawapay.io")
-PAWAPAY_SIGNING_KEY = env("PAWAPAY_SIGNING_KEY", default="")
+_raw_key = env("PAWAPAY_SIGNING_KEY", default="")
+PAWAPAY_SIGNING_KEY = _raw_key.replace("\\n", "\n") if _raw_key else ""
 PAWAPAY_SIGNING_KEY_ID = env("PAWAPAY_SIGNING_KEY_ID", default="")
 
 # ---------------------------------------------------------------------------
