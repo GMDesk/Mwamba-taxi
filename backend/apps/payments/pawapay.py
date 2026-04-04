@@ -4,25 +4,110 @@ PawaPay Mobile Money integration — V2 API.
 Handles deposits (customer top-up), payouts (driver withdrawal),
 and refunds via the PawaPay REST API V2.
 
-Migration from V1 → V2:
-  - Endpoints:  /deposits  → /v2/deposits  (same for payouts, refunds, active-conf)
-  - Payload:    correspondent → provider (inside accountDetails)
-  -             type: MSISDN → type: MMO
-  -             address.value → accountDetails.phoneNumber
-  -             statementDescription → customerMessage
-
 API docs: https://docs.pawapay.io/v2/
+Signatures: https://docs.pawapay.io/v2/docs/signatures
 """
+import base64
+import hashlib
+import json
 import logging
 import uuid
+from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 import requests
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec, utils
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
 PAWAPAY_API_URL = getattr(settings, "PAWAPAY_API_URL", "https://api.sandbox.pawapay.io")
 TIMEOUT = 30
+
+# ───────────────── RFC-9421 HTTP Message Signatures ────────────────────
+_SIGNING_KEY = None
+_SIGNING_KEY_ID = getattr(settings, "PAWAPAY_SIGNING_KEY_ID", "")
+
+
+def _get_signing_key():
+    """Lazy-load the ECDSA P-256 private key from settings."""
+    global _SIGNING_KEY
+    if _SIGNING_KEY is not None:
+        return _SIGNING_KEY
+    key_pem = getattr(settings, "PAWAPAY_SIGNING_KEY", "")
+    if not key_pem:
+        return None
+    _SIGNING_KEY = serialization.load_pem_private_key(
+        key_pem.encode() if isinstance(key_pem, str) else key_pem,
+        password=None,
+    )
+    return _SIGNING_KEY
+
+
+def _sign_request(method: str, url: str, body: bytes, content_type: str) -> dict:
+    """Build RFC-9421 signature headers for a PawaPay financial request.
+
+    Returns dict of extra headers (Content-Digest, Signature-Date,
+    Signature, Signature-Input).  Returns {} if no signing key is configured.
+    """
+    key = _get_signing_key()
+    if key is None:
+        return {}
+
+    key_id = _SIGNING_KEY_ID or "MWAMBA_KEY"
+    parsed = urlparse(url)
+    authority = parsed.netloc
+    path = parsed.path
+
+    # 1. Content-Digest (SHA-512)
+    digest_bytes = hashlib.sha512(body).digest()
+    content_digest = f"sha-512=:{base64.b64encode(digest_bytes).decode()}:"
+
+    # 2. Signature-Date
+    now = datetime.now(timezone.utc)
+    sig_date = now.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    created = int(now.timestamp())
+    expires = created + 60
+
+    # 3. Signature base (RFC-9421 §2.5)
+    sig_params = (
+        f'("@method" "@authority" "@path" "signature-date" '
+        f'"content-digest" "content-type");'
+        f'alg="ecdsa-p256-sha256";keyid="{key_id}";'
+        f"created={created};expires={expires}"
+    )
+    sig_base = "\n".join([
+        f'"@method": {method}',
+        f'"@authority": {authority}',
+        f'"@path": {path}',
+        f'"signature-date": {sig_date}',
+        f'"content-digest": {content_digest}',
+        f'"content-type": {content_type}',
+        f'"@signature-params": {sig_params}',
+    ])
+
+    # 4. ECDSA P-256 SHA-256 signature
+    signature = key.sign(sig_base.encode("utf-8"), ec.ECDSA(hashes.SHA256()))
+    sig_b64 = base64.b64encode(signature).decode()
+
+    return {
+        "Content-Digest": content_digest,
+        "Signature-Date": sig_date,
+        "Signature": f"sig-pp=:{sig_b64}:",
+        "Signature-Input": f"sig-pp={sig_params}",
+    }
+
+
+def _signed_post(url: str, payload: dict) -> requests.Response:
+    """POST with Bearer auth + optional RFC-9421 HTTP Message Signature."""
+    body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    hdrs = {
+        "Authorization": f"Bearer {settings.PAWAPAY_API_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    hdrs.update(_sign_request("POST", url, body, hdrs["Content-Type"]))
+    return requests.post(url, data=body, headers=hdrs, timeout=TIMEOUT)
 
 
 def _headers() -> dict:
@@ -129,12 +214,7 @@ def initiate_deposit(
     }
 
     try:
-        resp = requests.post(
-            f"{PAWAPAY_API_URL}/v2/deposits",
-            json=payload,
-            headers=_headers(),
-            timeout=TIMEOUT,
-        )
+        resp = _signed_post(f"{PAWAPAY_API_URL}/v2/deposits", payload)
         data = resp.json() if resp.content else {}
         logger.info("PawaPay deposit %s [%s] → %s %s", dep_id, provider, resp.status_code, data.get("status", ""))
         return {
@@ -182,12 +262,7 @@ def initiate_payout(
     }
 
     try:
-        resp = requests.post(
-            f"{PAWAPAY_API_URL}/v2/payouts",
-            json=payload,
-            headers=_headers(),
-            timeout=TIMEOUT,
-        )
+        resp = _signed_post(f"{PAWAPAY_API_URL}/v2/payouts", payload)
         data = resp.json() if resp.content else {}
         logger.info("PawaPay payout %s [%s] → %s %s", pay_id, provider, resp.status_code, data.get("status", ""))
         return {
@@ -214,12 +289,7 @@ def initiate_refund(deposit_id: str, refund_id: str | None = None) -> dict:
     }
 
     try:
-        resp = requests.post(
-            f"{PAWAPAY_API_URL}/v2/refunds",
-            json=payload,
-            headers=_headers(),
-            timeout=TIMEOUT,
-        )
+        resp = _signed_post(f"{PAWAPAY_API_URL}/v2/refunds", payload)
         data = resp.json() if resp.content else {}
         logger.info("PawaPay refund %s → %s", ref_id, resp.status_code)
         return {
